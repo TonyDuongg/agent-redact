@@ -6,11 +6,15 @@
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-blue)](package.json)
 
-> **Zero-latency, zero-leak secret & PII redactor for LLMs, Claude Code, and Agentic workflows.**
+> **Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents, LLMs, and Multi-Agent Workflows.**
 
-Developers and autonomous AI agents (Claude Code, Cursor, LangChain, AutoGen) frequently pipe local logs, source code, `.env` files, and database dumps directly into LLM prompt contexts. Unintentional leaks of credentials (Anthropic keys, OpenAI tokens, AWS keys, Stripe secrets, JWTs, database URLs) are catastrophic.
+Developers and autonomous AI agents (**Claude Code, Cursor, OpenAI, DeepSeek, Google Gemini, Ollama, LangChain, AutoGen, CrewAI**) frequently pipe local logs, source code, `.env` files, and database dumps directly into model prompt contexts. Unintentional leaks of credentials (Anthropic keys, OpenAI tokens, AWS keys, Stripe secrets, JWTs, database URLs) are catastrophic.
 
-`agent-redact` provides an ultra-fast, zero-dependency defense layer designed to sanitize inputs before they touch the model, and safely restore tokens when the model finishes generating responses.
+`agent-redact` is a universal privacy and secret firewall designed to protect **ANY** agentic architecture:
+* Intercepts prompts before network transmission to any cloud or local LLM.
+* Reversibly masks sensitive tokens (`[API_KEY_1]`).
+* Restores values in generated agent responses without ever leaking secrets to external servers or monitoring tools.
+* First-class integration via **CLI**, **Universal TypeScript Wrapper (`wrapAgent`)**, **Model Context Protocol (MCP)**, and **Web Middlewares (Express / Fastify / Next.js)**.
 
 ---
 
@@ -106,7 +110,65 @@ console.log(restoredResponse);
 
 ---
 
-### 3. Model Context Protocol (MCP) Server for Claude
+### 3. Universal AI Agent Interceptor (`wrapAgent`)
+
+Wrap **ANY** agent function or LLM caller (OpenAI, DeepSeek, Google Gemini, Ollama, LangChain, etc.) in a single line. Prompts are sanitized automatically before reaching the model, and answers are restored seamlessly:
+
+```typescript
+import { wrapAgent } from 'agent-redact';
+import OpenAI from 'openai';
+
+const openai = new OpenAI();
+
+// Wrap your agent call once:
+const safeChatAgent = wrapAgent(
+  async (sanitizedPrompt) => {
+    // The prompt received here NEVER contains raw secrets!
+    const res = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: sanitizedPrompt }]
+    });
+    return res.choices[0]?.message.content ?? '';
+  },
+  {
+    onLeakDetected: ({ result }) => {
+      console.warn(`[Firewall] Redacted ${result.totalLeaks} secret(s) before LLM call.`);
+    }
+  }
+);
+
+// Pass raw user prompt - secrets are masked on the fly and restored in the answer:
+const output = await safeChatAgent('Here is my token: sk-ant-api03-... please debug my server.');
+```
+
+---
+
+### 4. Express / Fastify / Node.js HTTP Middleware
+
+Protect your backend AI API endpoints against secret leaks in request bodies:
+
+```typescript
+import express from 'express';
+import { createExpressMiddleware } from 'agent-redact';
+
+const app = express();
+app.use(express.json());
+
+// Automatically sanitizes prompt and message fields in req.body:
+app.use(createExpressMiddleware());
+
+app.post('/api/agent', async (req, res) => {
+  // req.body.prompt is already sanitized!
+  // req.redact holds audit metadata and session vault
+  console.log(`Detected leaks: ${req.redact?.totalLeaks}`);
+  const result = await runMyAgent(req.body.prompt);
+  res.json({ result });
+});
+```
+
+---
+
+### 5. Model Context Protocol (MCP) Server (Claude, Cursor, Zed, Windsurf)
 
 `agent-redact` includes a native Model Context Protocol (MCP) server that empowers Claude Desktop and Claude Code to sanitize user input and file content on-the-fly before ingesting it into context.
 
