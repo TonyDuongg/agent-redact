@@ -17,8 +17,10 @@ const BINARY_EXTENSIONS = new Set([
 ]);
 
 function getInput(name: string, fallback: string = ''): string {
-  const envKey = `INPUT_${name.replace(/-/g, '_').toUpperCase()}`;
-  return process.env[envKey] ?? fallback;
+  const keyWithUnderscore = `INPUT_${name.replace(/-/g, '_').toUpperCase()}`;
+  const keyWithHyphen = `INPUT_${name.toUpperCase()}`;
+  const val = process.env[keyWithHyphen] ?? process.env[keyWithUnderscore];
+  return val !== undefined && val.trim().length > 0 ? val.trim() : fallback;
 }
 
 function setOutput(name: string, value: string): void {
