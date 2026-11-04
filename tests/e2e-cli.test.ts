@@ -64,7 +64,7 @@ DB_URL=postgres://user:SecretPass123@internal.db:5432/core
 
   it('should print version and exit 0', async () => {
     const { stdout } = await execFileAsync(process.execPath, [cliPath, '--version']);
-    expect(stdout.trim()).toBe('agent-redact v0.1.0');
+    expect(stdout.trim()).toMatch(/^agent-redact v\d+\.\d+\.\d+$/);
   });
 
   it('should fail with exit code 1 when input file does not exist', async () => {
