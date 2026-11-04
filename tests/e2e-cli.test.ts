@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { execFile } from 'node:child_process';
+import { execFile, execSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -36,6 +36,10 @@ DB_URL=postgres://user:SecretPass123@internal.db:5432/core
 `.trim();
 
   beforeAll(() => {
+    // Ensure dist bundle exists prior to E2E execution
+    if (!existsSync(cliPath)) {
+      execSync('npm run build', { stdio: 'ignore' });
+    }
     writeFileSync(rawFile, rawContent, 'utf-8');
   });
 
