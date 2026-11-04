@@ -68,3 +68,4 @@ export class RedactTransformStream extends Transform {
 export function createRedactStream(options?: RedactStreamOptions): RedactTransformStream {
   return new RedactTransformStream(options);
 }
+

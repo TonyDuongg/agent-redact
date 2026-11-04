@@ -61,3 +61,4 @@ describe('New Extended Patterns', () => {
     expect(res.text).toBe('Call customer support at [REDACTED_PHONE_NUMBER] or [REDACTED_PHONE_NUMBER]');
   });
 });
+

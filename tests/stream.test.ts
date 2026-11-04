@@ -37,3 +37,4 @@ describe('Stream Redaction (createRedactStream)', () => {
     expect(restored).toContain(fakeKey);
   });
 });
+

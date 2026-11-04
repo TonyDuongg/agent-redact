@@ -66,16 +66,16 @@ export const ipv6Pattern: RedactPattern = {
 };
 
 /**
- * Phone Number (US & International E.164 formats)
+ * Phone Number (US & International E.164 formats with separators or + prefix)
  */
 export const phonePattern: RedactPattern = {
   id: 'phone-number',
   name: 'Phone Number',
   category: 'pii',
   severity: 'medium',
-  regex: /(?:\+\d{1,3}[-.\s]?)?(?:\(?\d{2,4}\)?[-.\s]?)\d{3,4}[-.\s]?\d{3,4}\b/g,
+  regex: /(?:\+\d{1,3}[-.\s]?(?:\(?\d{1,4}\)?[-.\s]?)?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b|(?:\(\d{3}\)|\b\d{3})[-.\s]\d{3}[-.\s]\d{4}\b)/g,
   placeholder: 'PHONE_NUMBER',
-  description: 'Telephone number in local or international format'
+  description: 'Telephone number in formatted local or international E.164 format'
 };
 
 /**

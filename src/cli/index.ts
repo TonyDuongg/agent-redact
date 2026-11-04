@@ -97,13 +97,15 @@ async function main(): Promise<void> {
   const unmaskIdx = args.indexOf('--unmask');
   const unmaskVaultFile = unmaskIdx !== -1 && args[unmaskIdx + 1] ? args[unmaskIdx + 1] : undefined;
 
+  // Track argument indices that belong to flags with values
+  const skipIndices = new Set<number>();
+  if (outputIdx !== -1) skipIndices.add(outputIdx + 1);
+  if (vaultOutIdx !== -1) skipIndices.add(vaultOutIdx + 1);
+  if (unmaskIdx !== -1) skipIndices.add(unmaskIdx + 1);
+
   // Find non-flag file argument
   const fileArg = args.find(
-    (a, i) =>
-      !a.startsWith('-') &&
-      i !== outputIdx + 1 &&
-      i !== vaultOutIdx + 1 &&
-      i !== unmaskIdx + 1
+    (a, i) => !a.startsWith('-') && !skipIndices.has(i)
   );
 
   let content = '';

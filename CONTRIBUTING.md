@@ -80,3 +80,4 @@ We welcome contributions expanding secret pattern coverage! To add a new pattern
 2. Commit with conventional commit messages: `feat: add support for XYZ token pattern`.
 3. Push to your branch and open a PR against `main`.
 4. Ensure all GitHub Actions CI checks pass.
+

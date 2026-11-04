@@ -38,3 +38,4 @@ Instead, please report it via one of the following methods:
 * **Initial Response**: Within 48 hours of receipt.
 * **Triage & Patch**: Within 5-7 business days depending on severity.
 * **Public Disclosure**: Coordinated after an official patch release has been published to npm.
+
