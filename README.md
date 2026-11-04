@@ -106,6 +106,40 @@ console.log(restoredResponse);
 
 ---
 
+### 3. Model Context Protocol (MCP) Server for Claude
+
+`agent-redact` includes a native Model Context Protocol (MCP) server that empowers Claude Desktop and Claude Code to sanitize user input and file content on-the-fly before ingesting it into context.
+
+#### Claude Desktop Configuration
+Add `agent-redact` to your `claude_desktop_config.json`:
+
+* **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+* **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "agent-redact": {
+      "command": "npx",
+      "args": ["-y", "agent-redact", "mcp"]
+    }
+  }
+}
+```
+
+#### Available MCP Tools
+
+| Tool | Purpose |
+| :--- | :--- |
+| `redact_text` | Scans and redacts credentials/PII, optionally allocating reversible session placeholders |
+| `unmask_text` | Restores `[ANTHROPIC_API_KEY_1]` placeholders in Claude's output back to real keys in local session |
+| `scan_file` | Audits and redacts sensitive content in `.env`, config, or log files before Claude reads them |
+| `get_vault_status` | Inspects currently vaulted placeholders and timestamps without exposing plaintext secrets |
+| `clear_vault` | Wipes in-memory vault when session concludes |
+| `list_supported_patterns` | Queries all active secret definitions and threat levels |
+
+---
+
 ## 🎯 Supported Pattern Matrix
 
 | Secret / Pattern Category | Sample Format / Prefix | Severity | Default Action |
@@ -138,8 +172,10 @@ console.log(restoredResponse);
 * [x] **v1.1 (Reversible Session Vault)**:
   * In-memory Vault with bidirectional placeholder substitution.
   * Batch unmasking with token integrity preservation.
-* [ ] **v1.2 (Ecosystem Integrations)**:
+* [x] **v1.2 (Model Context Protocol Integration)**:
   * Official **Model Context Protocol (MCP)** server for Claude Desktop & Claude Code.
+  * 6 dedicated tools: `redact_text`, `unmask_text`, `scan_file`, `get_vault_status`, `clear_vault`, `list_supported_patterns`.
+* [ ] **v1.3 (Framework Adapters)**:
   * Express / Fastify / Next.js middleware adapters.
   * GitHub Action for CI/CD pre-commit secret screening.
 

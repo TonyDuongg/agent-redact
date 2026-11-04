@@ -4,7 +4,8 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     'patterns/index': 'src/patterns/index.ts',
-    'cli/index': 'src/cli/index.ts'
+    'cli/index': 'src/cli/index.ts',
+    'mcp/index': 'src/mcp/index.ts'
   },
   format: ['esm', 'cjs'],
   dts: true,
@@ -15,7 +16,12 @@ export default defineConfig({
   minify: false,
   target: 'node20',
   banner: (ctx) => {
-    if (ctx.entry === 'src/cli/index.ts' || ctx.entry === 'cli/index') {
+    if (
+      ctx.entry === 'src/cli/index.ts' ||
+      ctx.entry === 'cli/index' ||
+      ctx.entry === 'src/mcp/index.ts' ||
+      ctx.entry === 'mcp/index'
+    ) {
       return { js: '#!/usr/bin/env node' };
     }
     return {};

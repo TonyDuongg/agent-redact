@@ -8,6 +8,7 @@ agent-redact - Zero-latency secret & PII redactor for LLMs & agentic workflows
 USAGE:
   npx agent-redact <file>               Redact secrets in a file
   cat log.txt | npx agent-redact        Redact secrets from standard input (stdin)
+  npx agent-redact mcp                  Run as Model Context Protocol (MCP) server for Claude
 
 OPTIONS:
   -r, --reversible     Generate numbered session placeholders ([ANTHROPIC_API_KEY_1])
@@ -33,6 +34,12 @@ async function readStdin(): Promise<string> {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+
+  if (args[0] === 'mcp') {
+    const { runMcpServer } = await import('../mcp/server.js');
+    await runMcpServer();
+    return;
+  }
 
   if (args.includes('-h') || args.includes('--help')) {
     printHelp();
