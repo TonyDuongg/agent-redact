@@ -170,8 +170,14 @@ export async function runAction(): Promise<void> {
   }
 }
 
-// Execute if run directly as action entry point
-if (process.env.GITHUB_ACTIONS === 'true' || process.env.RUN_AGENT_REDACT_ACTION === 'true') {
+// Execute when run directly as the GitHub Action entry point
+const isEntryPoint =
+  process.argv[1] &&
+  (process.argv[1].endsWith('action/index.js') ||
+    process.argv[1].endsWith('action\\index.js') ||
+    process.env.RUN_AGENT_REDACT_ACTION === 'true');
+
+if (isEntryPoint) {
   runAction().catch((err) => {
     console.error('Fatal error in agent-redact action:', err);
     process.exit(1);
