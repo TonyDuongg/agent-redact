@@ -1,4 +1,5 @@
 import { DEFAULT_PATTERNS } from '../patterns/index.js';
+import { createHighEntropyPattern, isHighEntropyToken, type EntropyConfig } from './entropy.js';
 import type {
   RedactMatch,
   RedactOptions,
@@ -42,7 +43,13 @@ export class RedactEngine {
     const vault = options?.vault ?? this.vault ?? (reversible ? new Vault() : undefined);
 
     // Filter patterns according to options
-    let activePatterns = options?.customPatterns ?? this.patterns;
+    let activePatterns = options?.customPatterns
+      ? [...this.patterns, ...options.customPatterns]
+      : [...this.patterns];
+
+    if (options?.detectHighEntropy) {
+      activePatterns.push(createHighEntropyPattern(options.entropy as EntropyConfig | undefined));
+    }
 
     if (options?.include && options.include.length > 0) {
       const includeSet = new Set(options.include);
@@ -54,6 +61,7 @@ export class RedactEngine {
       activePatterns = activePatterns.filter((p) => !excludeSet.has(p.id));
     }
 
+    const allowlist = options?.allowlist ?? [];
     const rawMatches: RawMatch[] = [];
 
     // Scan each pattern
@@ -66,31 +74,41 @@ export class RedactEngine {
 
       let match: RegExpExecArray | null;
       while ((match = regex.exec(text)) !== null) {
+        let secret: string;
+        let startIndex: number;
+        let endIndex: number;
+
         // If pattern has a capturing group (e.g., secret in key=secret assignment), target group 1
         if (match[1] !== undefined && match[1].length > 0) {
-          const secret = match[1];
+          secret = match[1];
           const offsetInMatch = match[0].indexOf(secret);
-          const startIndex = match.index + offsetInMatch;
-          const endIndex = startIndex + secret.length;
-
-          rawMatches.push({
-            pattern,
-            secret,
-            startIndex,
-            endIndex
-          });
+          startIndex = match.index + offsetInMatch;
+          endIndex = startIndex + secret.length;
         } else {
-          const secret = match[0];
-          const startIndex = match.index;
-          const endIndex = startIndex + secret.length;
-
-          rawMatches.push({
-            pattern,
-            secret,
-            startIndex,
-            endIndex
-          });
+          secret = match[0];
+          startIndex = match.index;
+          endIndex = startIndex + secret.length;
         }
+
+        // Check if token matches allowlist
+        if (allowlist.length > 0 && allowlist.some((al) => secret === al || secret.includes(al))) {
+          continue;
+        }
+
+        // If generic high entropy pattern, verify that the token actually exhibits high randomness
+        if (
+          pattern.id === 'generic-high-entropy-secret' &&
+          !isHighEntropyToken(secret, options?.entropy as EntropyConfig | undefined)
+        ) {
+          continue;
+        }
+
+        rawMatches.push({
+          pattern,
+          secret,
+          startIndex,
+          endIndex
+        });
       }
     }
 

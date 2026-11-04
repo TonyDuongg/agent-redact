@@ -1,3 +1,5 @@
+import type { EntropyConfig } from './entropy.js';
+
 export type SecretCategory = 'credential' | 'pii' | 'network' | 'custom';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
@@ -62,6 +64,23 @@ export interface RedactOptions {
    * Custom list of patterns to use (overriding or supplementing defaults).
    */
   customPatterns?: RedactPattern[];
+
+  /**
+   * Whitelist of exact strings or substrings that should NEVER be redacted.
+   */
+  allowlist?: string[];
+
+  /**
+   * If true, enables Shannon entropy analysis to detect generic high-entropy
+   * cryptographic secrets that lack fixed vendor prefixes.
+   * @default false
+   */
+  detectHighEntropy?: boolean;
+
+  /**
+   * Custom entropy parameters (thresholds, min/max length).
+   */
+  entropy?: EntropyConfig;
 
   /**
    * Optional custom replacement formatting function.

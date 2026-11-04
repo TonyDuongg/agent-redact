@@ -188,7 +188,52 @@ app.post('/api/agent', async (req, res) => {
 
 ---
 
-### 5. Model Context Protocol (MCP) Server (Claude, Cursor, Zed, Windsurf)
+### 5. Configuration File & Custom Patterns (`.agentredactrc`)
+
+`agent-redact` automatically discovers and loads configuration from `.agentredactrc`, `.agentredactrc.json`, or `agent-redact.config.json` in your project root:
+
+```json
+{
+  "reversible": true,
+  "allowlist": [
+    "MOCK_KEY_FOR_LOCAL_DEV",
+    "developer@example.com"
+  ],
+  "detectHighEntropy": true,
+  "customPatterns": [
+    {
+      "id": "internal-corp-token",
+      "name": "Corporate Microservice Token",
+      "regex": "corp_live_[a-zA-Z0-9]{32}",
+      "placeholder": "CORP_TOKEN"
+    }
+  ]
+}
+```
+
+---
+
+### 6. Shannon Entropy Heuristics (Unknown Secret Detection)
+
+Fixed regex patterns can't predict private, custom, or proprietary token prefixes. When `--entropy` or `detectHighEntropy: true` is enabled, `agent-redact` calculates the mathematical **Shannon Entropy** ($H(X) = -\sum P(x) \log_2 P(x)$) of values in key-assignment contexts:
+
+* **Entropy $\ge 4.3$**: Flags and masks unstructured cryptographic Base64 strings.
+* **Entropy $\ge 3.2$**: Flags and masks random Hex keys.
+* **Predictable text** (`password = "admin123admin123"`): Safely ignored to prevent false positives.
+
+```typescript
+import { redact, calculateShannonEntropy } from 'agent-redact';
+
+// Detect unknown random secrets:
+const result = redact('custom_token = "d9F8qZ1_pLm4wK7aQx0vN2yB8rC3eH6j"', {
+  detectHighEntropy: true
+});
+// => custom_token = "[REDACTED_GENERIC_SECRET]"
+```
+
+---
+
+### 7. Model Context Protocol (MCP) Server (Claude, Cursor, Zed, Windsurf)
 
 `agent-redact` includes a native Model Context Protocol (MCP) server that empowers Claude Desktop and Claude Code to sanitize user input and file content on-the-fly before ingesting it into context.
 
@@ -285,7 +330,11 @@ npm run bench
   * `wrapAgent`: Framework-agnostic wrapper for OpenAI, DeepSeek, Gemini, Ollama, LangChain.
   * `createExpressMiddleware`: Express / Fastify / Node HTTP request body sanitizer.
   * `createRedactStream`: Node.js Transform stream for continuous log sanitization with $O(1)$ memory.
-* [ ] **v1.4 (CI/CD Ecosystem)**:
+* [x] **v1.4 (Customization & Shannon Entropy Heuristics)**:
+  * `.agentredactrc` / `agent-redact.config.json` configuration file loader.
+  * Custom regex patterns and allowlist/whitelist exemption engine.
+  * Shannon Entropy calculator ($H \ge 4.3$) for zero-day generic cryptographic keys.
+* [ ] **v1.5 (CI/CD Ecosystem & GitHub Action)**:
   * Official GitHub Action on GitHub Marketplace to screen PRs before merging.
   * Pre-commit git hook integration.
 

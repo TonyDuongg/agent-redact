@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "reversible": true,
+  "allowlist": [
+    "DUMMY_KEY_FOR_LOCAL_TESTING",
+    "example@domain.com"
+  ],
+  "exclude": [
+    "ipv4-address"
+  ],
+  "detectHighEntropy": true,
+  "entropy": {
+    "minLength": 20,
+    "maxLength": 120,
+    "base64Threshold": 4.3,
+    "hexThreshold": 3.2
+  },
+  "customPatterns": [
+    {
+      "id": "internal-corp-token",
+      "name": "Internal Corporate API Token",
+      "category": "credential",
+      "severity": "critical",
+      "regex": "corp_live_[a-zA-Z0-9]{32}",
+      "placeholder": "INTERNAL_CORP_TOKEN",
+      "description": "Internal microservice API token"
+    }
+  ]
+}

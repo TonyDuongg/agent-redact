@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
+import { loadConfig } from '../core/config.js';
 
 // Minimal zero-dependency ANSI color helpers
 const colors = {
@@ -31,6 +32,8 @@ ${colors.bold}OPTIONS:${colors.reset}
   -o, --output <file>         Write sanitized content to target file instead of stdout
   -i, --inplace               Modify input file in-place
   -j, --json                  Output result and leak metadata as JSON
+  --config <path>             Path to configuration file (.agentredactrc or json)
+  --entropy                   Enable Shannon entropy detection for generic secrets
   --vault-out <file>          Save generated session vault mappings to JSON file
   --unmask <vaultFile>        Restore previously masked file using saved vault file
   --stats                     Display leak statistics breakdown table
@@ -87,6 +90,7 @@ async function main(): Promise<void> {
   const isJson = args.includes('-j') || args.includes('--json');
   const showStats = args.includes('--stats');
   const isInplace = args.includes('-i') || args.includes('--inplace');
+  const detectEntropy = args.includes('--entropy');
 
   const outputIdx = args.findIndex((a) => a === '-o' || a === '--output');
   const outputFile = outputIdx !== -1 && args[outputIdx + 1] ? args[outputIdx + 1] : undefined;
@@ -97,11 +101,25 @@ async function main(): Promise<void> {
   const unmaskIdx = args.indexOf('--unmask');
   const unmaskVaultFile = unmaskIdx !== -1 && args[unmaskIdx + 1] ? args[unmaskIdx + 1] : undefined;
 
+  const configIdx = args.indexOf('--config');
+  const configPath = configIdx !== -1 && args[configIdx + 1] ? args[configIdx + 1] : undefined;
+
   // Track argument indices that belong to flags with values
   const skipIndices = new Set<number>();
   if (outputIdx !== -1) skipIndices.add(outputIdx + 1);
   if (vaultOutIdx !== -1) skipIndices.add(vaultOutIdx + 1);
   if (unmaskIdx !== -1) skipIndices.add(unmaskIdx + 1);
+  if (configIdx !== -1) skipIndices.add(configIdx + 1);
+
+  // Load config file if present
+  let loadedConfig = null;
+  try {
+    loadedConfig = loadConfig(configPath);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`${colors.red}Configuration Error:${colors.reset} ${msg}`);
+    process.exit(1);
+  }
 
   // Find non-flag file argument
   const fileArg = args.find(
@@ -162,8 +180,18 @@ async function main(): Promise<void> {
   }
 
   // Standard redact / mask mode
-  const vault = isReversible ? new Vault() : undefined;
-  const result = redact(content, { reversible: isReversible, vault });
+  const effectiveReversible = isReversible || (loadedConfig?.reversible ?? false);
+  const vault = effectiveReversible ? new Vault() : undefined;
+  const result = redact(content, {
+    reversible: effectiveReversible,
+    vault,
+    include: loadedConfig?.include,
+    exclude: loadedConfig?.exclude,
+    allowlist: loadedConfig?.allowlist,
+    customPatterns: loadedConfig?.customPatterns,
+    detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+    entropy: loadedConfig?.entropy
+  });
 
   // Save vault file if requested
   if (vaultOutFile && vault) {
