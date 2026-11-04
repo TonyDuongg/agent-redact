@@ -7,8 +7,8 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "agent-redact": "./dist/cli/index.js",
-    "agent-redact-mcp": "./dist/mcp/index.js"
+    "agent-redact": "dist/cli/index.js",
+    "agent-redact-mcp": "dist/mcp/index.js"
   },
   "exports": {
     ".": {

@@ -15,17 +15,6 @@ export default defineConfig({
   splitting: false,
   treeshake: true,
   minify: false,
-  target: 'node20',
-  banner: (ctx) => {
-    if (
-      ctx.entry === 'src/cli/index.ts' ||
-      ctx.entry === 'cli/index' ||
-      ctx.entry === 'src/mcp/index.ts' ||
-      ctx.entry === 'mcp/index'
-    ) {
-      return { js: '#!/usr/bin/env node' };
-    }
-    return {};
-  }
+  target: 'node20'
 });
 

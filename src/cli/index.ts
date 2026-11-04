@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
 import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
