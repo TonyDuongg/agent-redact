@@ -1,6 +1,6 @@
 {
   "name": "agent-redact",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zero-latency, zero-leak secret & PII redactor for LLMs, Claude Code, and Agentic workflows",
   "type": "module",
   "main": "./dist/index.cjs",
