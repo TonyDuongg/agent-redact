@@ -267,6 +267,51 @@ Add `agent-redact` to your `claude_desktop_config.json`:
 
 ---
 
+### 8. GitHub Action for CI/CD Secret Screening
+
+Automatically scan Pull Requests and commits for leaked credentials before they can be merged. Add `.github/workflows/secret-audit.yml`:
+
+```yaml
+name: Secret & Privacy Audit
+
+on: [push, pull_request]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan repository for secrets
+        uses: TonyDuongg/agent-redact@main
+        with:
+          scan-path: '.'
+          fail-on-leak: 'true'
+          detect-entropy: 'true'
+          exclude: 'node_modules,dist,build,.git,coverage'
+```
+
+#### GitHub Action Features
+* **In-PR Error Annotations**: Pinpoints exact file and line numbers directly on the GitHub PR Diff view.
+* **Rich Markdown Step Summary**: Renders an audit table in GitHub Actions summary with detected categories, threat severities, and timestamps.
+* **Zero Runtime Overhead**: Executes in milliseconds with native Node.js.
+
+---
+
+### 9. Pre-commit Git Hook
+
+Prevent accidental credential commits locally using [pre-commit](https://pre-commit.com):
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/TonyDuongg/agent-redact
+    rev: v0.1.0
+    hooks:
+      - id: agent-redact
+```
+
+---
+
 ## 🎯 Supported Pattern Matrix
 
 | Secret / Pattern Category | Sample Format / Prefix | Severity | Default Action |
@@ -334,9 +379,13 @@ npm run bench
   * `.agentredactrc` / `agent-redact.config.json` configuration file loader.
   * Custom regex patterns and allowlist/whitelist exemption engine.
   * Shannon Entropy calculator ($H \ge 4.3$) for zero-day generic cryptographic keys.
-* [ ] **v1.5 (CI/CD Ecosystem & GitHub Action)**:
-  * Official GitHub Action on GitHub Marketplace to screen PRs before merging.
-  * Pre-commit git hook integration.
+* [x] **v1.5 (CI/CD Ecosystem & GitHub Action)**:
+  * Official GitHub Action (`action.yml`) with in-PR file & line annotations.
+  * Markdown Step Summary table in GitHub Actions runner.
+  * `.pre-commit-hooks.yaml` for pre-commit git hooks.
+* [ ] **v1.6 (NPM Public Distribution)**:
+  * Official public publishing to npm registry (`npm install agent-redact`).
+  * GitHub Release tag `v0.1.0` with verified provenance.
 
 ---
 

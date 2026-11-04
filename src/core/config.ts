@@ -112,3 +112,4 @@ export function loadConfig(
     throw new Error(`Failed to parse agent-redact config at ${targetPath}: ${msg}`);
   }
 }
+

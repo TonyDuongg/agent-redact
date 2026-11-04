@@ -76,3 +76,4 @@ describe('Configuration & Allowlist (Giai đoạn 1)', () => {
     expect(() => loadConfig('non-existent-config.json')).toThrowError('Config file not found');
   });
 });
+

@@ -1,0 +1,37 @@
+name: 'agent-redact Secret & PII Scanner'
+description: 'Zero-latency, zero-leak secret & PII redactor and scanner for LLMs, Claude Code, and CI/CD'
+author: 'Tony Duong'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  scan-path:
+    description: 'Directory or file path to scan for credentials'
+    required: false
+    default: '.'
+  fail-on-leak:
+    description: 'Whether to exit with code 1 and fail the build if secrets are detected'
+    required: false
+    default: 'true'
+  detect-entropy:
+    description: 'Whether to enable Shannon entropy heuristic analysis for unknown cryptographic keys'
+    required: false
+    default: 'false'
+  config-path:
+    description: 'Optional path to .agentredactrc or agent-redact.config.json'
+    required: false
+  exclude:
+    description: 'Comma-separated list of directories to exclude from scanning'
+    required: false
+    default: 'node_modules,dist,build,.git,coverage,.turbo'
+
+outputs:
+  has-leaks:
+    description: 'Boolean ("true" or "false") indicating whether sensitive secrets were detected'
+  total-leaks:
+    description: 'Integer count of sensitive tokens detected'
+
+runs:
+  using: 'node20'
+  main: 'dist/action/index.js'
