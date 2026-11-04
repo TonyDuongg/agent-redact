@@ -1,6 +1,8 @@
 // Core Engine & Vault
 export { RedactEngine, redact, unmask } from './core/engine.js';
 export { Vault } from './core/vault.js';
+export { createRedactStream, RedactTransformStream } from './core/stream.js';
+export type { RedactStreamOptions } from './core/stream.js';
 
 // Universal Agent Interceptors & Middlewares
 export { wrapAgent, createExpressMiddleware } from './middleware/index.js';

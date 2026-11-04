@@ -53,11 +53,39 @@ export const creditCardPattern: RedactPattern = {
 };
 
 /**
+ * IPv6 Address
+ */
+export const ipv6Pattern: RedactPattern = {
+  id: 'ipv6-address',
+  name: 'IPv6 Address',
+  category: 'network',
+  severity: 'low',
+  regex: /\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b/g,
+  placeholder: 'IPV6_ADDRESS',
+  description: 'Standard 128-bit IPv6 address'
+};
+
+/**
+ * Phone Number (US & International E.164 formats)
+ */
+export const phonePattern: RedactPattern = {
+  id: 'phone-number',
+  name: 'Phone Number',
+  category: 'pii',
+  severity: 'medium',
+  regex: /(?:\+\d{1,3}[-.\s]?)?(?:\(?\d{2,4}\)?[-.\s]?)\d{3,4}[-.\s]?\d{3,4}\b/g,
+  placeholder: 'PHONE_NUMBER',
+  description: 'Telephone number in local or international format'
+};
+
+/**
  * Export array of all built-in PII patterns
  */
 export const PII_PATTERNS: RedactPattern[] = [
   emailPattern,
   ipv4Pattern,
+  ipv6Pattern,
+  phonePattern,
   ssnPattern,
   creditCardPattern
 ];

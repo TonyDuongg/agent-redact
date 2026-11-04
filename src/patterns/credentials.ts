@@ -184,6 +184,58 @@ export const discordTokenPattern: RedactPattern = {
 };
 
 /**
+ * NPM Access Token (Automation or granular token)
+ */
+export const npmTokenPattern: RedactPattern = {
+  id: 'npm-token',
+  name: 'NPM Access Token',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bnpm_[A-Za-z0-9]{36}\b/g,
+  placeholder: 'NPM_TOKEN',
+  description: 'Node Package Manager (npm) access token'
+};
+
+/**
+ * SendGrid API Key
+ */
+export const sendgridApiKeyPattern: RedactPattern = {
+  id: 'sendgrid-api-key',
+  name: 'SendGrid API Key',
+  category: 'credential',
+  severity: 'high',
+  regex: /\bSG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}\b/g,
+  placeholder: 'SENDGRID_API_KEY',
+  description: 'SendGrid Email API key'
+};
+
+/**
+ * Twilio Account SID
+ */
+export const twilioAccountSidPattern: RedactPattern = {
+  id: 'twilio-account-sid',
+  name: 'Twilio Account SID',
+  category: 'credential',
+  severity: 'high',
+  regex: /\bAC[0-9a-fA-F]{32}\b/g,
+  placeholder: 'TWILIO_ACCOUNT_SID',
+  description: 'Twilio Account Identifier'
+};
+
+/**
+ * Supabase Service/Secret Key
+ */
+export const supabaseKeyPattern: RedactPattern = {
+  id: 'supabase-key',
+  name: 'Supabase Key',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bsbp_[a-zA-Z0-9]{40}\b/g,
+  placeholder: 'SUPABASE_KEY',
+  description: 'Supabase Project or Management API key'
+};
+
+/**
  * Export array of all built-in credential patterns
  */
 export const CREDENTIAL_PATTERNS: RedactPattern[] = [
@@ -200,5 +252,9 @@ export const CREDENTIAL_PATTERNS: RedactPattern[] = [
   databaseUriPattern,
   huggingFaceTokenPattern,
   gitlabTokenPattern,
-  discordTokenPattern
+  discordTokenPattern,
+  npmTokenPattern,
+  sendgridApiKeyPattern,
+  twilioAccountSidPattern,
+  supabaseKeyPattern
 ];
