@@ -91,7 +91,7 @@ console.log(result.text);
 // Output:
 // Debug this config:
 // ANTHROPIC_API_KEY=[REDACTED_ANTHROPIC_API_KEY]
-// DATABASE_URL=[REDACTED_DATABASE_URI]
+// DATABASE_URL=[REDACTED_DATABASE_URL]
 
 console.log(`Detected ${result.totalLeaks} leak(s) in ${result.durationMs}ms`);
 ```
@@ -324,7 +324,7 @@ repos:
 | **Stripe Keys** | `sk_live_...`, `pk_live_...`, `rk_live_...` | `CRITICAL` | `[STRIPE_API_KEY]` |
 | **Private Keys** | `-----BEGIN RSA/OPENSSH PRIVATE KEY-----` | `CRITICAL` | `[PRIVATE_KEY]` |
 | **JSON Web Token (JWT)** | `eyJ... . eyJ... . ...` | `HIGH` | `[JWT_TOKEN]` |
-| **Database URIs** | `postgres://`, `mongodb://`, `mysql://`, `redis://` | `CRITICAL` | `[DATABASE_URI]` |
+| **Database URLs** | `postgres://`, `mongodb://`, `mysql://`, `redis://` | `CRITICAL` | `[DATABASE_URL]` |
 | **Google Cloud / Gemini** | `AIza[0-9A-Za-z_-]{35}` | `HIGH` | `[GOOGLE_API_KEY]` |
 | **Slack Tokens** | `xoxb-...`, `xoxp-...`, `xapp-...` | `HIGH` | `[SLACK_TOKEN]` |
 | **Hugging Face Token** | `hf_[a-zA-Z0-9]{34}` | `HIGH` | `[HUGGINGFACE_TOKEN]` |

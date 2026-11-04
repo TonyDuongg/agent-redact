@@ -1,4 +1,4 @@
-import { CREDENTIAL_PATTERNS } from './credentials.js';
+import { CREDENTIAL_PATTERNS, databaseUrlPattern } from './credentials.js';
 import { PII_PATTERNS } from './pii.js';
 import type { RedactPattern } from '../core/types.js';
 
@@ -16,7 +16,8 @@ export const DEFAULT_PATTERNS: RedactPattern[] = [
 /**
  * Map pattern ID to RedactPattern for fast lookup
  */
-export const PATTERN_MAP: ReadonlyMap<string, RedactPattern> = new Map(
-  DEFAULT_PATTERNS.map((p) => [p.id, p])
-);
+export const PATTERN_MAP: ReadonlyMap<string, RedactPattern> = new Map([
+  ...DEFAULT_PATTERNS.map((p) => [p.id, p] as [string, RedactPattern]),
+  ['database-uri', databaseUrlPattern] // Alias for backwards compatibility
+]);
 

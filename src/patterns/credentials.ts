@@ -132,17 +132,22 @@ export const slackTokenPattern: RedactPattern = {
 };
 
 /**
- * Database Connection URI (PostgreSQL, MySQL, MongoDB, Redis with credentials)
+ * Database Connection URL (PostgreSQL, MySQL, MongoDB, Redis with credentials)
  */
-export const databaseUriPattern: RedactPattern = {
-  id: 'database-uri',
-  name: 'Database Connection URI',
+export const databaseUrlPattern: RedactPattern = {
+  id: 'database-url',
+  name: 'Database Connection URL',
   category: 'credential',
   severity: 'critical',
   regex: /\b(?:postgres|postgresql|mysql|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:]+:[^\s@]+@[^\s/:]+(?::\d+)?\/[^\s?"']+\b/g,
-  placeholder: 'DATABASE_URI',
-  description: 'Database connection URI containing user and password credentials'
+  placeholder: 'DATABASE_URL',
+  description: 'Database connection URL containing user and password credentials'
 };
+
+/**
+ * Backward-compatibility alias for databaseUrlPattern
+ */
+export const databaseUriPattern: RedactPattern = databaseUrlPattern;
 
 /**
  * Hugging Face Token
@@ -249,7 +254,7 @@ export const CREDENTIAL_PATTERNS: RedactPattern[] = [
   privateKeyPattern,
   googleApiKeyPattern,
   slackTokenPattern,
-  databaseUriPattern,
+  databaseUrlPattern,
   huggingFaceTokenPattern,
   gitlabTokenPattern,
   discordTokenPattern,

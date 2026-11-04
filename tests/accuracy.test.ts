@@ -86,8 +86,8 @@ describe('Accuracy & Defect Verification (False Positives & False Negatives)', (
       const dbUrl = 'postgresql://db_user:P%40ssw0rd%21%23%24@cluster.aws.internal:5432/production';
       const res = redact(`DATABASE_URL="${dbUrl}"`);
       expect(res.hasLeaks).toBe(true);
-      expect(res.matches[0]?.patternId).toBe('database-uri');
-      expect(res.text).toBe('DATABASE_URL="[REDACTED_DATABASE_URI]"');
+      expect(res.matches[0]?.patternId).toBe('database-url');
+      expect(res.text).toBe('DATABASE_URL="[REDACTED_DATABASE_URL]"');
     });
 
     it('should catch AWS secret access key with different variable naming conventions', () => {

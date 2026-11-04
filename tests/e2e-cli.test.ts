@@ -86,7 +86,7 @@ DB_URL=postgres://user:SecretPass123@internal.db:5432/core
     expect(safeContent).not.toContain(openAiKey);
     expect(safeContent).toContain('[REDACTED_ANTHROPIC_API_KEY]');
     expect(safeContent).toContain('[REDACTED_OPENAI_API_KEY]');
-    expect(safeContent).toContain('[REDACTED_DATABASE_URI]');
+    expect(safeContent).toContain('[REDACTED_DATABASE_URL]');
   });
 
   it('should perform reversible masking and unmasking roundtrip with exact byte fidelity', async () => {

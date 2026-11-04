@@ -158,15 +158,15 @@ MIIEowIBAAKCAQEA0Y3y1e2...fake...data...
     });
   });
 
-  describe('Database Connection URIs', () => {
+  describe('Database Connection URLs', () => {
     it('should detect PostgreSQL URI with password', () => {
       const uri = 'postgres://admin:superSecretPass123@db.prod.internal:5432/production_db';
       const input = `DATABASE_URL="${uri}"`;
 
       const result = redact(input);
       expect(result.hasLeaks).toBe(true);
-      expect(result.matches[0]?.patternId).toBe('database-uri');
-      expect(result.text).toBe('DATABASE_URL="[REDACTED_DATABASE_URI]"');
+      expect(result.matches[0]?.patternId).toBe('database-url');
+      expect(result.text).toBe('DATABASE_URL="[REDACTED_DATABASE_URL]"');
     });
   });
 
