@@ -1,0 +1,168 @@
+# agent-redact 🛡️
+
+[![CI](https://github.com/TonyDuongg/agent-redact/actions/workflows/ci.yml/badge.svg)](https://github.com/TonyDuongg/agent-redact/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/agent-redact.svg?style=flat&color=3178c6)](https://www.npmjs.com/package/agent-redact)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-blue)](package.json)
+
+> **Zero-latency, zero-leak secret & PII redactor for LLMs, Claude Code, and Agentic workflows.**
+
+Developers and autonomous AI agents (Claude Code, Cursor, LangChain, AutoGen) frequently pipe local logs, source code, `.env` files, and database dumps directly into LLM prompt contexts. Unintentional leaks of credentials (Anthropic keys, OpenAI tokens, AWS keys, Stripe secrets, JWTs, database URLs) are catastrophic.
+
+`agent-redact` provides an ultra-fast, zero-dependency defense layer designed to sanitize inputs before they touch the model, and safely restore tokens when the model finishes generating responses.
+
+---
+
+## ⚡ Highlights
+
+* **Zero-Latency Performance**: Optimized single-pass regex compilation executes in under **2ms** even for large prompt payloads.
+* **Zero Runtime Dependencies**: Pure TypeScript/JavaScript with zero third-party packages at runtime, eliminating supply-chain vulnerabilities.
+* **Dual-Way Reversible Masking (Vault)**: Masks sensitive tokens into numbered session placeholders (`[ANTHROPIC_API_KEY_1]`) and reliably unmasks them after the LLM completes its reasoning.
+* **Severity-Based Conflict Resolution**: Mathematical arbitration prioritizes high-risk credentials over overlapping low-risk patterns (e.g. GitHub PAT vs. email regex).
+* **CLI & SDK Ready**: Instant CLI utility (`npx agent-redact`) and modern dual ESM/CJS SDK for Node.js 20+.
+
+---
+
+## 📦 Installation
+
+```bash
+# Install globally or as a project dependency
+npm install agent-redact
+
+# Or run instantly via npx
+npx agent-redact --help
+```
+
+---
+
+## 🚀 Quick Start
+
+### 1. Command-Line Interface (CLI)
+
+#### Pipe input directly:
+```bash
+cat server.log | npx agent-redact
+```
+
+#### Scan a specific file:
+```bash
+npx agent-redact .env
+```
+
+#### Reversible masking (generates session placeholders):
+```bash
+cat app.log | npx agent-redact --reversible
+```
+
+#### Output as JSON for automated pipelines:
+```bash
+cat app.log | npx agent-redact --json
+```
+
+---
+
+### 2. Node.js / TypeScript SDK
+
+#### One-Way Redaction (Sanitization)
+```typescript
+import { redact } from 'agent-redact';
+
+const prompt = `Debug this config:
+ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
+DATABASE_URL=postgres://user:password123@db.prod.internal:5432/main`;
+
+const result = redact(prompt);
+
+console.log(result.text);
+// Output:
+// Debug this config:
+// ANTHROPIC_API_KEY=[REDACTED_ANTHROPIC_API_KEY]
+// DATABASE_URL=[REDACTED_DATABASE_URI]
+
+console.log(`Detected ${result.totalLeaks} leak(s) in ${result.durationMs}ms`);
+```
+
+#### Two-Way Reversible Masking & Unmasking (LLM Roundtrip)
+```typescript
+import { redact, unmask } from 'agent-redact';
+
+const userPrompt = 'Please connect with Anthropic key sk-ant-api03-...';
+
+// 1. Mask secrets before sending to LLM
+const { text: safePrompt, vault } = redact(userPrompt, { reversible: true });
+console.log(safePrompt);
+// => "Please connect with Anthropic key [ANTHROPIC_API_KEY_1]"
+
+// 2. LLM works safely with the placeholder
+const llmResponse = await callClaudeSonnet(safePrompt);
+// => "I will initiate the connection using [ANTHROPIC_API_KEY_1]."
+
+// 3. Unmask original secrets when executing locally
+const restoredResponse = unmask(llmResponse, vault!);
+console.log(restoredResponse);
+// => "I will initiate the connection using sk-ant-api03-..."
+```
+
+---
+
+## 🎯 Supported Pattern Matrix
+
+| Secret / Pattern Category | Sample Format / Prefix | Severity | Default Action |
+| :--- | :--- | :---: | :---: |
+| **Anthropic API Key** | `sk-ant-api03-...`, `sk-ant-admin01-...` | `CRITICAL` | `[ANTHROPIC_API_KEY]` |
+| **OpenAI API Key** | `sk-proj-...`, `sk-...` | `CRITICAL` | `[OPENAI_API_KEY]` |
+| **AWS Access Key ID** | `AKIA...`, `ASIA...` (20 chars) | `HIGH` | `[AWS_ACCESS_KEY_ID]` |
+| **AWS Secret Access Key** | 40-character base64 with context | `CRITICAL` | `[AWS_SECRET_ACCESS_KEY]` |
+| **GitHub Tokens** | `ghp_...`, `github_pat_...`, `gho_...` | `CRITICAL` | `[GITHUB_TOKEN]` |
+| **Stripe Keys** | `sk_live_...`, `pk_live_...`, `rk_live_...` | `CRITICAL` | `[STRIPE_API_KEY]` |
+| **Private Keys** | `-----BEGIN RSA/OPENSSH PRIVATE KEY-----` | `CRITICAL` | `[PRIVATE_KEY]` |
+| **JSON Web Token (JWT)** | `eyJ... . eyJ... . ...` | `HIGH` | `[JWT_TOKEN]` |
+| **Database URIs** | `postgres://`, `mongodb://`, `mysql://`, `redis://` | `CRITICAL` | `[DATABASE_URI]` |
+| **Google Cloud / Gemini** | `AIza[0-9A-Za-z_-]{35}` | `HIGH` | `[GOOGLE_API_KEY]` |
+| **Slack Tokens** | `xoxb-...`, `xoxp-...`, `xapp-...` | `HIGH` | `[SLACK_TOKEN]` |
+| **Hugging Face Token** | `hf_[a-zA-Z0-9]{34}` | `HIGH` | `[HUGGINGFACE_TOKEN]` |
+| **GitLab PAT** | `glpat-[0-9a-zA-Z-_]{20,}` | `HIGH` | `[GITLAB_TOKEN]` |
+| **PII: Emails & IPv4** | RFC 5322 emails, public/private IPs | `MEDIUM` | `[EMAIL_ADDRESS]`, `[IPV4_ADDRESS]` |
+| **PII: SSN & Cards** | US SSN, Major Credit Cards | `CRITICAL` | `[US_SSN]`, `[CREDIT_CARD]` |
+
+---
+
+## 🗺️ Roadmap & Milestones
+
+* [x] **v1.0 (Core Engine & CLI)**:
+  * High-performance single-pass regex scanner for 20+ secret categories.
+  * Conflict resolution algorithm based on token severity.
+  * Dual ESM/CJS build targeting Node.js 20+.
+  * Zero runtime dependencies.
+* [x] **v1.1 (Reversible Session Vault)**:
+  * In-memory Vault with bidirectional placeholder substitution.
+  * Batch unmasking with token integrity preservation.
+* [ ] **v1.2 (Ecosystem Integrations)**:
+  * Official **Model Context Protocol (MCP)** server for Claude Desktop & Claude Code.
+  * Express / Fastify / Next.js middleware adapters.
+  * GitHub Action for CI/CD pre-commit secret screening.
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTING.md) and submit PRs with corresponding unit tests.
+
+```bash
+# Run test suite
+npm test
+
+# Type checking
+npm run typecheck
+
+# Build bundle
+npm run build
+```
+
+---
+
+## 📄 License
+
+[MIT](LICENSE) © 2025-2026 Agent Redact Contributors.
+

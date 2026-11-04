@@ -1,0 +1,29 @@
+name: Feature Request / New Token Pattern
+description: Propose a new token pattern or engine improvement
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: Help us expand coverage for sensitive developer tokens and credentials!
+  - type: input
+    id: provider
+    attributes:
+      label: Service or Provider
+      description: Which service or platform does this secret belong to? (e.g. Supabase, Datadog)
+    validations:
+      required: true
+  - type: textarea
+    id: pattern_format
+    attributes:
+      label: Secret Token Format
+      description: Describe the prefix, character set, and length format (provide sanitized examples).
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use Case & Workflow
+      description: How will this benefit LLMs and agentic workflows?
+    validations:
+      required: true
+

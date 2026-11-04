@@ -1,0 +1,23 @@
+# Source and development files
+src/
+tests/
+.github/
+.vscode/
+.idea/
+
+# Config files
+tsconfig.json
+vitest.config.ts
+tsup.config.ts
+.eslintrc*
+.prettier*
+
+# Coverage and caches
+coverage/
+*.log
+.vitest/
+
+# Git
+.git/
+.gitignore
+

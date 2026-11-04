@@ -1,0 +1,213 @@
+import { DEFAULT_PATTERNS } from '../patterns/index.js';
+import type {
+  RedactMatch,
+  RedactOptions,
+  RedactPattern,
+  RedactResult
+} from './types.js';
+import { Vault } from './vault.js';
+
+const SEVERITY_WEIGHT: Record<string, number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1
+};
+
+interface RawMatch {
+  pattern: RedactPattern;
+  secret: string;
+  startIndex: number;
+  endIndex: number;
+}
+
+export class RedactEngine {
+  private patterns: RedactPattern[];
+  private vault?: Vault;
+
+  constructor(options?: { patterns?: RedactPattern[]; vault?: Vault }) {
+    this.patterns = options?.patterns ?? [...DEFAULT_PATTERNS];
+    this.vault = options?.vault;
+  }
+
+  /**
+   * Redacts sensitive secrets and PII from the input string.
+   */
+  public redact(
+    text: string,
+    options?: RedactOptions & { vault?: Vault }
+  ): RedactResult & { vault?: Vault } {
+    const startTime = performance.now();
+    const reversible = options?.reversible ?? false;
+    const vault = options?.vault ?? this.vault ?? (reversible ? new Vault() : undefined);
+
+    // Filter patterns according to options
+    let activePatterns = options?.customPatterns ?? this.patterns;
+
+    if (options?.include && options.include.length > 0) {
+      const includeSet = new Set(options.include);
+      activePatterns = activePatterns.filter((p) => includeSet.has(p.id));
+    }
+
+    if (options?.exclude && options.exclude.length > 0) {
+      const excludeSet = new Set(options.exclude);
+      activePatterns = activePatterns.filter((p) => !excludeSet.has(p.id));
+    }
+
+    const rawMatches: RawMatch[] = [];
+
+    // Scan each pattern
+    for (const pattern of activePatterns) {
+      // Create a fresh regex instance with global flag to avoid lastIndex race conditions
+      const flags = pattern.regex.flags.includes('g')
+        ? pattern.regex.flags
+        : pattern.regex.flags + 'g';
+      const regex = new RegExp(pattern.regex.source, flags);
+
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(text)) !== null) {
+        // If pattern has a capturing group (e.g., secret in key=secret assignment), target group 1
+        if (match[1] !== undefined && match[1].length > 0) {
+          const secret = match[1];
+          const offsetInMatch = match[0].indexOf(secret);
+          const startIndex = match.index + offsetInMatch;
+          const endIndex = startIndex + secret.length;
+
+          rawMatches.push({
+            pattern,
+            secret,
+            startIndex,
+            endIndex
+          });
+        } else {
+          const secret = match[0];
+          const startIndex = match.index;
+          const endIndex = startIndex + secret.length;
+
+          rawMatches.push({
+            pattern,
+            secret,
+            startIndex,
+            endIndex
+          });
+        }
+      }
+    }
+
+    // Prioritize candidates: highest severity first, then longest span, then earliest start
+    rawMatches.sort((a, b) => {
+      const weightA = SEVERITY_WEIGHT[a.pattern.severity] ?? 0;
+      const weightB = SEVERITY_WEIGHT[b.pattern.severity] ?? 0;
+      if (weightA !== weightB) {
+        return weightB - weightA;
+      }
+      const lenA = a.endIndex - a.startIndex;
+      const lenB = b.endIndex - b.startIndex;
+      if (lenA !== lenB) {
+        return lenB - lenA;
+      }
+      return a.startIndex - b.startIndex;
+    });
+
+    // Accept candidate matches without overlapping already accepted higher-priority matches
+    const accepted: RawMatch[] = [];
+    for (const candidate of rawMatches) {
+      const hasOverlap = accepted.some(
+        (acc) => candidate.startIndex < acc.endIndex && acc.startIndex < candidate.endIndex
+      );
+      if (!hasOverlap) {
+        accepted.push(candidate);
+      }
+    }
+
+    // Sort accepted matches in textual reading order (startIndex ascending)
+    accepted.sort((a, b) => a.startIndex - b.startIndex);
+
+    // Construct final text and format replacements
+    const matches: RedactMatch[] = [];
+    const stats: Record<string, number> = {};
+    let redactedText = '';
+    let cursor = 0;
+
+    for (let i = 0; i < accepted.length; i++) {
+      const m = accepted[i]!;
+
+      // Determine replacement token
+      let replacement: string;
+      if (options?.customFormatter) {
+        replacement = options.customFormatter({
+          pattern: m.pattern,
+          matchedText: m.secret,
+          index: i + 1,
+          reversible
+        });
+      } else if (reversible && vault) {
+        replacement = vault.getOrCreate(m.secret, m.pattern);
+      } else {
+        replacement = `[REDACTED_${m.pattern.placeholder}]`;
+      }
+
+      // Append text before match
+      redactedText += text.slice(cursor, m.startIndex);
+      redactedText += replacement;
+      cursor = m.endIndex;
+
+      matches.push({
+        patternId: m.pattern.id,
+        patternName: m.pattern.name,
+        category: m.pattern.category,
+        severity: m.pattern.severity,
+        matchedText: m.secret,
+        startIndex: m.startIndex,
+        endIndex: m.endIndex,
+        replacement
+      });
+
+      stats[m.pattern.id] = (stats[m.pattern.id] ?? 0) + 1;
+    }
+
+    // Append remaining tail text
+    redactedText += text.slice(cursor);
+
+    const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
+
+    return {
+      text: redactedText,
+      matches,
+      hasLeaks: matches.length > 0,
+      totalLeaks: matches.length,
+      stats,
+      durationMs,
+      vault
+    };
+  }
+
+  /**
+   * Unmasks a string using the provided Vault instance.
+   */
+  public unmask(text: string, vault: Vault): string {
+    return vault.unmask(text);
+  }
+}
+
+/**
+ * Singleton engine instance for quick functional usage
+ */
+const defaultEngine = new RedactEngine();
+
+/**
+ * Quick one-off redaction helper
+ */
+export function redact(
+  text: string,
+  options?: RedactOptions & { vault?: Vault }
+): RedactResult & { vault?: Vault } {
+  return defaultEngine.redact(text, options);
+}
+
+/**
+ * Quick unmasking helper
+ */
+export function unmask(text: string, vault: Vault): string {
+  return defaultEngine.unmask(text, vault);
+}

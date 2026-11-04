@@ -1,0 +1,29 @@
+name: Bug Report
+description: Report a false positive, false negative, or runtime bug
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting an issue to `agent-redact`!
+  - type: textarea
+    id: secret_type
+    attributes:
+      label: Target Secret / Pattern Type
+      description: What secret or token type was involved? (e.g. Anthropic API Key, AWS Secret Key)
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What happened instead? (Please DO NOT paste real production secrets!)
+    validations:
+      required: true
+
