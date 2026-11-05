@@ -32,6 +32,33 @@ export class RedactTransformStream extends Transform {
     callback: TransformCallback
   ): void {
     this.buffer += chunk.toString();
+
+    // If buffer contains a potential start of a PEM private key without its closing delimiter,
+    // buffer up to 64KB so multi-line private keys are matched as a unified block
+    if (
+      this.buffer.includes('-----BEGIN') &&
+      !this.buffer.includes('-----END') &&
+      this.buffer.length < 65536
+    ) {
+      callback();
+      return;
+    }
+
+    // If a complete multi-line PEM block is detected, process the buffer directly
+    if (this.buffer.includes('-----BEGIN') && this.buffer.includes('-----END')) {
+      const res = redact(this.buffer, {
+        ...this.options,
+        vault: this.vault
+      });
+      if (this.options.onLineRedacted && res.hasLeaks) {
+        this.options.onLineRedacted(res);
+      }
+      this.push(res.text);
+      this.buffer = '';
+      callback();
+      return;
+    }
+
     const lines = this.buffer.split('\n');
     // Keep the trailing chunk until full newline
     this.buffer = lines.pop() ?? '';

@@ -36,5 +36,34 @@ describe('Stream Redaction (createRedactStream)', () => {
     const restored = unmask(output, redactStream.vault);
     expect(restored).toContain(fakeKey);
   });
+
+  it('should stream-redact multi-line PEM private keys across chunks', async () => {
+    const pemKey = [
+      '-----BEGIN RSA PRIVATE KEY-----',
+      'MIIEowIBAAKCAQEA0Y3y1e2fakePEMdatathatisspreadovermultiplechunksfor',
+      'testingpurposesandshouldberedactedseamlesslyinastreamenvironment123',
+      '-----END RSA PRIVATE KEY-----'
+    ].join('\n');
+
+    // Split PEM across two distinct streaming chunks
+    const chunk1 = 'Server config:\n' + pemKey.slice(0, 50);
+    const chunk2 = pemKey.slice(50) + '\nEnd of config';
+
+    const source = Readable.from([chunk1, chunk2]);
+    const redactStream = createRedactStream({ reversible: true });
+
+    let output = '';
+    for await (const chunk of source.pipe(redactStream)) {
+      output += chunk.toString();
+    }
+
+    expect(output).not.toContain('MIIEowIBAAKCAQEA');
+    expect(output).toContain('[PRIVATE_KEY_1]');
+    expect(output).toContain('Server config:');
+    expect(output).toContain('End of config');
+
+    const restored = unmask(output, redactStream.vault);
+    expect(restored).toContain(pemKey);
+  });
 });
 

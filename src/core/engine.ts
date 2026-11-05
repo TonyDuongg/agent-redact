@@ -66,10 +66,10 @@ export class RedactEngine {
 
     // Scan each pattern
     for (const pattern of activePatterns) {
-      // Create a fresh regex instance with global flag to avoid lastIndex race conditions
-      const flags = pattern.regex.flags.includes('g')
-        ? pattern.regex.flags
-        : pattern.regex.flags + 'g';
+      // Create a fresh regex instance with global and indices flags to avoid race conditions and guarantee byte-exact offsets
+      let flags = pattern.regex.flags;
+      if (!flags.includes('g')) flags += 'g';
+      if (!flags.includes('d')) flags += 'd';
       const regex = new RegExp(pattern.regex.source, flags);
 
       let match: RegExpExecArray | null;
@@ -81,9 +81,15 @@ export class RedactEngine {
         // If pattern has a capturing group (e.g., secret in key=secret assignment), target group 1
         if (match[1] !== undefined && match[1].length > 0) {
           secret = match[1];
-          const offsetInMatch = match[0].indexOf(secret);
-          startIndex = match.index + offsetInMatch;
-          endIndex = startIndex + secret.length;
+          const indices = (match as any).indices;
+          if (indices && indices[1]) {
+            startIndex = indices[1][0];
+            endIndex = indices[1][1];
+          } else {
+            const offsetInMatch = match[0].indexOf(secret);
+            startIndex = match.index + offsetInMatch;
+            endIndex = startIndex + secret.length;
+          }
         } else {
           secret = match[0];
           startIndex = match.index;

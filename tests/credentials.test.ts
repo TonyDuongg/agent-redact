@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { redact, unmask } from '../src/index.js';
+import { redact, unmask, Vault } from '../src/index.js';
 
 // Helper to assemble mock secrets dynamically without tripping git push protection / scanners
 const sampleKey = (...parts: string[]) => parts.join('');
@@ -204,6 +204,51 @@ MIIEowIBAAKCAQEA0Y3y1e2...fake...data...
       expect(restored).toBe(
         `I received your request with ${dummyAnthropicKey} and confirmed ${dummyOpenAIKey} is ready.`
       );
+    });
+
+    it('should support Vault serialization (toJSON) and deserialization (fromJSON) with exact fidelity', () => {
+      const dummyKey = sampleKey('sk-ant-api03-', 'abc123xyz456secretkey00000000000000000000000000000000000000000000000000000000000000000000000000000000');
+      const res = redact(`ANTHROPIC_KEY=${dummyKey}`, { reversible: true });
+      expect(res.text).toBe('ANTHROPIC_KEY=[ANTHROPIC_API_KEY_1]');
+
+      // Serialize vault
+      const jsonStr = res.vault!.toJSON();
+      expect(typeof jsonStr).toBe('string');
+
+      // Deserialize in separate session
+      const restoredVault = Vault.fromJSON(jsonStr);
+      expect(restoredVault.size).toBe(1);
+
+      // Unmask with deserialized vault
+      const unmasked = unmask(res.text, restoredVault);
+      expect(unmasked).toBe(`ANTHROPIC_KEY=${dummyKey}`);
+    });
+
+    it('should prevent cascading placeholder collision during unmasking', () => {
+      // Test single-pass safety: token 1 contains the text of token 2's placeholder
+      const secret1 = 'normal_secret_with_subtext';
+      const secret2 = 'second_secret';
+
+      const customVault = new Vault();
+      customVault.restoreEntry({
+        placeholder: '[SUB_1]',
+        original: secret1,
+        patternId: 'p1',
+        category: 'credential',
+        timestamp: Date.now()
+      });
+      customVault.restoreEntry({
+        placeholder: '[SUB_10]',
+        original: secret2,
+        patternId: 'p2',
+        category: 'credential',
+        timestamp: Date.now()
+      });
+
+      // Longest token [SUB_10] must be matched before [SUB_1] without prefix corruption
+      const masked = 'Items: [SUB_10] and [SUB_1]';
+      const unmasked = unmask(masked, customVault);
+      expect(unmasked).toBe(`Items: ${secret2} and ${secret1}`);
     });
   });
 

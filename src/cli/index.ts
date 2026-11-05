@@ -147,20 +147,7 @@ async function main(): Promise<void> {
   if (unmaskVaultFile) {
     try {
       const rawVault = readFileSync(unmaskVaultFile, 'utf-8');
-      const entries = JSON.parse(rawVault) as Array<{ placeholder: string; original: string }>;
-      const vault = new Vault();
-      for (const e of entries) {
-        vault.getOrCreate(e.original, {
-          id: 'restored',
-          name: 'Restored',
-          category: 'credential',
-          severity: 'critical',
-          regex: /(?:)/,
-          placeholder: e.placeholder.replace(/^\[|\]$/g, '').replace(/_\d+$/, ''),
-          description: ''
-        });
-      }
-
+      const vault = Vault.fromJSON(rawVault);
       const restoredText = unmask(content, vault);
 
       if (outputFile) {

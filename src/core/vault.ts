@@ -46,14 +46,74 @@ export class Vault {
   }
 
   /**
-   * Replaces all placeholders in a string back with their original secrets.
+   * Replaces all placeholders in a string back with their original secrets
+   * in a deterministic, collision-free single regex pass.
    */
   public unmask(text: string): string {
-    let result = text;
-    for (const [placeholder, entry] of this.placeholderToEntry.entries()) {
-      result = result.split(placeholder).join(entry.original);
+    if (this.placeholderToEntry.size === 0 || !text) {
+      return text;
     }
-    return result;
+
+    // Sort placeholders by length descending to prevent substring collisions
+    const placeholders = Array.from(this.placeholderToEntry.keys()).sort(
+      (a, b) => b.length - a.length
+    );
+
+    // Escape regex characters (e.g. [ and ])
+    const escaped = placeholders.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const regex = new RegExp(escaped.join('|'), 'g');
+
+    return text.replace(regex, (matched) => {
+      const entry = this.placeholderToEntry.get(matched);
+      return entry ? entry.original : matched;
+    });
+  }
+
+  /**
+   * Directly restores an entry into the vault without altering placeholder names.
+   */
+  public restoreEntry(entry: VaultEntry): void {
+    this.placeholderToEntry.set(entry.placeholder, entry);
+    this.originalToPlaceholder.set(entry.original, entry.placeholder);
+
+    // Synchronize counter to prevent future collision
+    const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
+    if (match && match[1] && match[2]) {
+      const prefix = match[1];
+      const num = parseInt(match[2], 10);
+      const current = this.counters.get(prefix) ?? 0;
+      if (num > current) {
+        this.counters.set(prefix, num);
+      }
+    }
+  }
+
+  /**
+   * Restores a list of entries into the vault.
+   */
+  public restoreEntries(entries: VaultEntry[]): void {
+    for (const entry of entries) {
+      this.restoreEntry(entry);
+    }
+  }
+
+  /**
+   * Serializes the vault entries to JSON string.
+   */
+  public toJSON(): string {
+    return JSON.stringify(this.entries(), null, 2);
+  }
+
+  /**
+   * Deserializes a JSON string or array of entries into a new Vault instance.
+   */
+  public static fromJSON(data: string | VaultEntry[]): Vault {
+    const vault = new Vault();
+    const list: VaultEntry[] = typeof data === 'string' ? JSON.parse(data) : data;
+    if (Array.isArray(list)) {
+      vault.restoreEntries(list);
+    }
+    return vault;
   }
 
   /**
