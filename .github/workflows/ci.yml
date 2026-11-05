@@ -36,7 +36,7 @@ jobs:
 
       - name: Verify dist bundle is in sync
         if: runner.os == 'Linux'
-        run: git diff --exit-code dist
+        run: git -c core.fileMode=false diff --exit-code dist
 
       - name: Run unit & E2E tests
         run: npm test
