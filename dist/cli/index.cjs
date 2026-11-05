@@ -117,7 +117,7 @@ var init_credentials = __esm({
       name: "Database Connection URL",
       category: "credential",
       severity: "critical",
-      regex: /\b(?:postgres|postgresql|mysql|mariadb|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:]*:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+      regex: /\b(?:postgres|postgresql|mysql|mariadb|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:/@]*:[^\s/@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
       placeholder: "DATABASE_URL",
       description: "Database connection URL containing user and password credentials"
     };
@@ -126,7 +126,7 @@ var init_credentials = __esm({
       name: "HTTP Basic Auth URL",
       category: "credential",
       severity: "critical",
-      regex: /\bhttps?:\/\/[^\s:]+:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+      regex: /\bhttps?:\/\/[^\s:/@]+:[^\s/@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
       placeholder: "BASIC_AUTH_URL",
       description: "HTTP/HTTPS URL containing username and password credentials"
     };
@@ -234,7 +234,15 @@ function isValidLuhn(numStr) {
   }
   return sum % 10 === 0;
 }
-var emailPattern, ipv4Pattern, ssnPattern, creditCardPattern, ipv6Pattern, phonePattern, PII_PATTERNS;
+function isLikelyIpv6(candidate) {
+  if (candidate === IPV6_LOOPBACK) return true;
+  const groups = candidate.split(":").filter((g) => g.length > 0);
+  if (groups.length < 2) return false;
+  if (!/[0-9]/.test(candidate)) return false;
+  if (groups.length === 2 && candidate.includes("::") && groups[0].length < 3) return false;
+  return true;
+}
+var emailPattern, ipv4Pattern, ssnPattern, creditCardPattern, ipv6Pattern, IPV6_LOOPBACK, phonePattern, PII_PATTERNS;
 var init_pii = __esm({
   "src/patterns/pii.ts"() {
     emailPattern = {
@@ -281,8 +289,10 @@ var init_pii = __esm({
       severity: "low",
       regex: /(?<![a-zA-Z0-9_:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|::[1])(?![a-zA-Z0-9_:])/gi,
       placeholder: "IPV6_ADDRESS",
-      description: "Standard or compressed 128-bit IPv6 address"
+      description: "Standard or compressed 128-bit IPv6 address",
+      validator: isLikelyIpv6
     };
+    IPV6_LOOPBACK = ["", "", "1"].join(":");
     phonePattern = {
       id: "phone-number",
       name: "Phone Number",
@@ -457,7 +467,9 @@ var init_vault = __esm({
       restoreEntry(entry) {
         this.placeholderToEntry.set(entry.placeholder, entry);
         const existingList = this.placeholderToEntries.get(entry.placeholder) ?? [];
-        existingList.push(entry);
+        if (!existingList.some((e) => e.original === entry.original)) {
+          existingList.push(entry);
+        }
         this.placeholderToEntries.set(entry.placeholder, existingList);
         this.originalToPlaceholder.set(entry.original, entry.placeholder);
         const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
@@ -509,7 +521,7 @@ var init_vault = __esm({
        * Number of unique secrets stored.
        */
       get size() {
-        return this.placeholderToEntries.size;
+        return this.originalToPlaceholder.size;
       }
       /**
        * Wipes all secrets from memory.
@@ -656,6 +668,12 @@ var init_engine = __esm({
               reversible
             });
             if (reversible && vault) {
+              const existingOriginal = vault.getOriginal(replacement);
+              if (existingOriginal !== void 0 && existingOriginal !== m.secret) {
+                throw new Error(
+                  `customFormatter returned the same placeholder "${replacement}" for two different secrets. Reversible mode requires a unique placeholder per secret (e.g. include info.index or a hash).`
+                );
+              }
               vault.restoreEntry({
                 placeholder: replacement,
                 original: m.secret,
@@ -739,20 +757,63 @@ __export(server_exports, {
   createMcpServer: () => createMcpServer,
   runMcpServer: () => runMcpServer
 });
-function isPathInAllowedDirectories(targetPath) {
-  const allowedRoots = [
-    path.resolve(process.cwd()),
-    path.resolve(os.tmpdir()),
-    ...process.env.AGENT_REDACT_ALLOWED_DIR ? [path.resolve(process.env.AGENT_REDACT_ALLOWED_DIR)] : []
-  ];
-  const resolvedTarget = path.resolve(targetPath);
-  return allowedRoots.some((root) => {
-    const rel = path.relative(root, resolvedTarget);
-    return !rel.startsWith("..") && !path.isAbsolute(rel);
-  });
+function realpathOrNearest(p) {
+  let current = path.resolve(p);
+  const tail = [];
+  for (; ; ) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...tail.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return path.resolve(p);
+      }
+      tail.push(path.basename(current));
+      current = parent;
+    }
+  }
 }
-function createMcpServer() {
+function defaultAllowedRoots() {
+  return [
+    process.cwd(),
+    os.tmpdir(),
+    ...process.env.AGENT_REDACT_ALLOWED_DIR ? [process.env.AGENT_REDACT_ALLOWED_DIR] : []
+  ];
+}
+function checkPath(targetPath, roots, mode) {
+  const realTarget = realpathOrNearest(targetPath);
+  for (const root of roots) {
+    const rel = path.relative(root, realTarget);
+    const inside = rel === "" || !path.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${path.sep}`);
+    if (!inside) continue;
+    if (mode === "write" && rel.split(path.sep).some((segment) => segment.toLowerCase() === ".git")) {
+      return { ok: false, reason: "writing inside a .git directory is not allowed" };
+    }
+    return { ok: true, realPath: realTarget };
+  }
+  return { ok: false, reason: "outside the allowed directories (workspace or temp)" };
+}
+function writeUniqueBackup(file, content) {
+  for (let i = 0; i < 1e3; i++) {
+    const candidate = i === 0 ? `${file}.bak` : `${file}.bak.${i}`;
+    try {
+      fs.writeFileSync(candidate, content, { encoding: "utf-8", mode: 384, flag: "wx" });
+      return candidate;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+    }
+  }
+  throw new Error(`Unable to allocate a backup file name for ${file}`);
+}
+function securityError(field, value, reason) {
+  return {
+    isError: true,
+    content: [{ type: "text", text: `Security error: ${field} "${value}" is ${reason}.` }]
+  };
+}
+function createMcpServer(options = {}) {
   const sessionVault = new Vault();
+  const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
   const server = new mcp_js.McpServer({
     name: "agent-redact",
     version: "0.1.2"
@@ -815,21 +876,13 @@ function createMcpServer() {
           ]
         };
       }
-      if (!isPathInAllowedDirectories(outputFilePath)) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Security error: outputFilePath "${outputFilePath}" is outside the allowed directories (workspace or temp).`
-            }
-          ]
-        };
+      const outCheck = checkPath(outputFilePath, allowedRoots, "write");
+      if (!outCheck.ok) {
+        return securityError("outputFilePath", outputFilePath, outCheck.reason);
       }
       try {
         const restored = unmask(text, sessionVault);
-        const resolvedPath = path.resolve(process.cwd(), outputFilePath);
-        fs.writeFileSync(resolvedPath, restored, { encoding: "utf-8", mode: 384 });
+        fs.writeFileSync(outCheck.realPath, restored, { encoding: "utf-8", mode: 384 });
         return {
           content: [
             {
@@ -857,29 +910,19 @@ function createMcpServer() {
       outputFilePath: zod.z.string().optional().describe("Optional destination path within workspace to write sanitized content")
     },
     async ({ filePath, reversible, inPlace, outputFilePath }) => {
-      if (!isPathInAllowedDirectories(filePath)) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Security error: filePath "${filePath}" is outside the allowed directories (workspace or temp).`
-            }
-          ]
-        };
+      const fileCheck = checkPath(filePath, allowedRoots, inPlace ? "write" : "read");
+      if (!fileCheck.ok) {
+        return securityError("filePath", filePath, fileCheck.reason);
       }
-      if (outputFilePath && !isPathInAllowedDirectories(outputFilePath)) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Security error: outputFilePath "${outputFilePath}" is outside the allowed directories (workspace or temp).`
-            }
-          ]
-        };
+      let resolvedOut;
+      if (outputFilePath) {
+        const outCheck = checkPath(outputFilePath, allowedRoots, "write");
+        if (!outCheck.ok) {
+          return securityError("outputFilePath", outputFilePath, outCheck.reason);
+        }
+        resolvedOut = outCheck.realPath;
       }
-      const resolvedFile = path.resolve(process.cwd(), filePath);
+      const resolvedFile = fileCheck.realPath;
       if (!fs.existsSync(resolvedFile)) {
         return {
           isError: true,
@@ -895,13 +938,16 @@ function createMcpServer() {
         const rawContent = fs.readFileSync(resolvedFile, "utf-8");
         const result = redact(rawContent, { reversible, vault: sessionVault });
         let backupPath = null;
+        let writtenTo = null;
         if (inPlace) {
-          backupPath = `${resolvedFile}.bak`;
-          fs.writeFileSync(backupPath, rawContent, { encoding: "utf-8", mode: 384 });
-          fs.writeFileSync(resolvedFile, result.text, "utf-8");
-        } else if (outputFilePath) {
-          const resolvedOut = path.resolve(process.cwd(), outputFilePath);
+          if (result.hasLeaks) {
+            backupPath = writeUniqueBackup(resolvedFile, rawContent);
+            fs.writeFileSync(resolvedFile, result.text, "utf-8");
+            writtenTo = filePath;
+          }
+        } else if (resolvedOut) {
           fs.writeFileSync(resolvedOut, result.text, "utf-8");
+          writtenTo = outputFilePath ?? null;
         }
         return {
           content: [
@@ -916,7 +962,8 @@ function createMcpServer() {
                   stats: result.stats,
                   durationMs: result.durationMs,
                   backupCreated: backupPath,
-                  writtenTo: inPlace ? filePath : outputFilePath ?? null
+                  backupWarning: backupPath ? "Backup contains the ORIGINAL plaintext secrets. Keep it out of version control and delete it when no longer needed." : void 0,
+                  writtenTo
                 },
                 null,
                 2

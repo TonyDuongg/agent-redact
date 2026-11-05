@@ -1,29 +1,95 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { resolve, relative, isAbsolute } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
+import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
 import { DEFAULT_PATTERNS } from '../patterns/index.js';
 
-function isPathInAllowedDirectories(targetPath: string): boolean {
-  const allowedRoots = [
-    resolve(process.cwd()),
-    resolve(tmpdir()),
-    ...(process.env.AGENT_REDACT_ALLOWED_DIR ? [resolve(process.env.AGENT_REDACT_ALLOWED_DIR)] : [])
-  ];
-
-  const resolvedTarget = resolve(targetPath);
-  return allowedRoots.some((root) => {
-    const rel = relative(root, resolvedTarget);
-    return !rel.startsWith('..') && !isAbsolute(rel);
-  });
+export interface McpServerOptions {
+  /**
+   * Directories the file tools may read from / write to.
+   * Defaults to the process cwd, the OS temp dir and AGENT_REDACT_ALLOWED_DIR (if set).
+   */
+  allowedRoots?: string[];
 }
 
-export function createMcpServer(): McpServer {
+/**
+ * Resolves symlinks/junctions for the deepest existing ancestor of `p`
+ * and re-appends the not-yet-existing tail, so new files are checked
+ * against their real destination directory.
+ */
+function realpathOrNearest(p: string): string {
+  let current = resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync.native(current), ...tail.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) {
+        return resolve(p);
+      }
+      tail.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+function defaultAllowedRoots(): string[] {
+  return [
+    process.cwd(),
+    tmpdir(),
+    ...(process.env.AGENT_REDACT_ALLOWED_DIR ? [process.env.AGENT_REDACT_ALLOWED_DIR] : [])
+  ];
+}
+
+type PathCheck = { ok: true; realPath: string } | { ok: false; reason: string };
+
+function checkPath(targetPath: string, roots: string[], mode: 'read' | 'write'): PathCheck {
+  const realTarget = realpathOrNearest(targetPath);
+
+  for (const root of roots) {
+    const rel = relative(root, realTarget);
+    const inside = rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
+    if (!inside) continue;
+
+    // Writing into VCS metadata (e.g. .git/hooks) would allow code execution
+    if (mode === 'write' && rel.split(sep).some((segment) => segment.toLowerCase() === '.git')) {
+      return { ok: false, reason: 'writing inside a .git directory is not allowed' };
+    }
+    return { ok: true, realPath: realTarget };
+  }
+
+  return { ok: false, reason: 'outside the allowed directories (workspace or temp)' };
+}
+
+/** Writes a backup without ever overwriting an existing one: file.bak, file.bak.1, ... */
+function writeUniqueBackup(file: string, content: string): string {
+  for (let i = 0; i < 1000; i++) {
+    const candidate = i === 0 ? `${file}.bak` : `${file}.bak.${i}`;
+    try {
+      writeFileSync(candidate, content, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+      return candidate;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  }
+  throw new Error(`Unable to allocate a backup file name for ${file}`);
+}
+
+function securityError(field: string, value: string, reason: string) {
+  return {
+    isError: true,
+    content: [{ type: 'text' as const, text: `Security error: ${field} "${value}" is ${reason}.` }]
+  };
+}
+
+export function createMcpServer(options: McpServerOptions = {}): McpServer {
   const sessionVault = new Vault();
+  const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
 
   const server = new McpServer({
     name: 'agent-redact',
@@ -99,22 +165,14 @@ export function createMcpServer(): McpServer {
         };
       }
 
-      if (!isPathInAllowedDirectories(outputFilePath)) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: `Security error: outputFilePath "${outputFilePath}" is outside the allowed directories (workspace or temp).`
-            }
-          ]
-        };
+      const outCheck = checkPath(outputFilePath, allowedRoots, 'write');
+      if (!outCheck.ok) {
+        return securityError('outputFilePath', outputFilePath, outCheck.reason);
       }
 
       try {
         const restored = unmask(text, sessionVault);
-        const resolvedPath = resolve(process.cwd(), outputFilePath);
-        writeFileSync(resolvedPath, restored, { encoding: 'utf-8', mode: 0o600 });
+        writeFileSync(outCheck.realPath, restored, { encoding: 'utf-8', mode: 0o600 });
         return {
           content: [
             {
@@ -153,31 +211,21 @@ export function createMcpServer(): McpServer {
         .describe('Optional destination path within workspace to write sanitized content')
     },
     async ({ filePath, reversible, inPlace, outputFilePath }) => {
-      if (!isPathInAllowedDirectories(filePath)) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: `Security error: filePath "${filePath}" is outside the allowed directories (workspace or temp).`
-            }
-          ]
-        };
+      const fileCheck = checkPath(filePath, allowedRoots, inPlace ? 'write' : 'read');
+      if (!fileCheck.ok) {
+        return securityError('filePath', filePath, fileCheck.reason);
       }
 
-      if (outputFilePath && !isPathInAllowedDirectories(outputFilePath)) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: `Security error: outputFilePath "${outputFilePath}" is outside the allowed directories (workspace or temp).`
-            }
-          ]
-        };
+      let resolvedOut: string | undefined;
+      if (outputFilePath) {
+        const outCheck = checkPath(outputFilePath, allowedRoots, 'write');
+        if (!outCheck.ok) {
+          return securityError('outputFilePath', outputFilePath, outCheck.reason);
+        }
+        resolvedOut = outCheck.realPath;
       }
 
-      const resolvedFile = resolve(process.cwd(), filePath);
+      const resolvedFile = fileCheck.realPath;
       if (!existsSync(resolvedFile)) {
         return {
           isError: true,
@@ -195,14 +243,18 @@ export function createMcpServer(): McpServer {
         const result = redact(rawContent, { reversible, vault: sessionVault });
 
         let backupPath: string | null = null;
+        let writtenTo: string | null = null;
         if (inPlace) {
-          backupPath = `${resolvedFile}.bak`;
-          // Always create .bak backup before destructive in-place write
-          writeFileSync(backupPath, rawContent, { encoding: 'utf-8', mode: 0o600 });
-          writeFileSync(resolvedFile, result.text, 'utf-8');
-        } else if (outputFilePath) {
-          const resolvedOut = resolve(process.cwd(), outputFilePath);
+          // Only touch the file when there is something to sanitize, and never
+          // overwrite an earlier backup (it may hold the only copy of the original secrets).
+          if (result.hasLeaks) {
+            backupPath = writeUniqueBackup(resolvedFile, rawContent);
+            writeFileSync(resolvedFile, result.text, 'utf-8');
+            writtenTo = filePath;
+          }
+        } else if (resolvedOut) {
           writeFileSync(resolvedOut, result.text, 'utf-8');
+          writtenTo = outputFilePath ?? null;
         }
 
         return {
@@ -218,7 +270,10 @@ export function createMcpServer(): McpServer {
                   stats: result.stats,
                   durationMs: result.durationMs,
                   backupCreated: backupPath,
-                  writtenTo: inPlace ? filePath : (outputFilePath ?? null)
+                  backupWarning: backupPath
+                    ? 'Backup contains the ORIGINAL plaintext secrets. Keep it out of version control and delete it when no longer needed.'
+                    : undefined,
+                  writtenTo
                 },
                 null,
                 2

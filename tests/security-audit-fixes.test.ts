@@ -299,13 +299,21 @@ describe('Security Audit Fixes & Verification', () => {
       expect(spread.vault).toBeUndefined();
     });
 
-    it('should sequentially unmask multiple secrets mapped to the same placeholder via customFormatter', () => {
+    it('should refuse to map different secrets to the same customFormatter placeholder in reversible mode', () => {
+      // Order-based "sequential" unmasking restores the wrong secret as soon as the
+      // LLM response mentions placeholders in a different order or count, so it now throws.
       const key1 = sampleKey('AKIA', 'IOSFODNN7EXAMPLE');
       const key2 = 'ghp_' + 'a'.repeat(36);
       const text = `${key1} and ${key2}`;
-      const res = redact(text, { reversible: true, customFormatter: () => '[X]' });
-      expect(res.text).toBe('[X] and [X]');
-      expect(res.vault!.unmask(res.text)).toBe(text);
+      expect(() => redact(text, { reversible: true, customFormatter: () => '[X]' })).toThrow(
+        /same placeholder/
+      );
+      const unique = redact(text, {
+        reversible: true,
+        customFormatter: ({ index }) => `[X_${index}]`
+      });
+      expect(unique.text).toBe('[X_1] and [X_2]');
+      expect(unique.vault!.unmask('[X_2] then [X_1]')).toBe(`${key2} then ${key1}`);
     });
 
     it('should redact split private keys in stream even when preceded by a certificate block', async () => {

@@ -80,8 +80,28 @@ export const ipv6Pattern: RedactPattern = {
   severity: 'low',
   regex: /(?<![a-zA-Z0-9_:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|::[1])(?![a-zA-Z0-9_:])/gi,
   placeholder: 'IPV6_ADDRESS',
-  description: 'Standard or compressed 128-bit IPv6 address'
+  description: 'Standard or compressed 128-bit IPv6 address',
+  validator: isLikelyIpv6
 };
+
+const IPV6_LOOPBACK = ['', '', '1'].join(':');
+
+/**
+ * Rejects code that merely looks like compressed IPv6, e.g. Python slices
+ * or hex-only C++/Rust namespace paths (see tests/audit-round3.test.ts).
+ */
+function isLikelyIpv6(candidate: string): boolean {
+  if (candidate === IPV6_LOOPBACK) return true;
+  const groups = candidate.split(':').filter((g) => g.length > 0);
+  // A single group after a double colon is a slice step, not an address
+  if (groups.length < 2) return false;
+  // Real addresses virtually always contain a digit; hex-only identifiers do not
+  if (!/[0-9]/.test(candidate)) return false;
+  // Two-group compressed link-local / multicast forms start with a 3-4 char group;
+  // shorter first groups are slices with a start index or short namespaces
+  if (groups.length === 2 && candidate.includes('::') && groups[0]!.length < 3) return false;
+  return true;
+}
 
 /**
  * Phone Number (US & International E.164 formats with separators or + prefix)

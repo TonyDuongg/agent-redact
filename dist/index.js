@@ -99,7 +99,7 @@ var databaseUrlPattern = {
   name: "Database Connection URL",
   category: "credential",
   severity: "critical",
-  regex: /\b(?:postgres|postgresql|mysql|mariadb|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:]*:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+  regex: /\b(?:postgres|postgresql|mysql|mariadb|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:/@]*:[^\s/@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
   placeholder: "DATABASE_URL",
   description: "Database connection URL containing user and password credentials"
 };
@@ -109,7 +109,7 @@ var basicAuthUrlPattern = {
   name: "HTTP Basic Auth URL",
   category: "credential",
   severity: "critical",
-  regex: /\bhttps?:\/\/[^\s:]+:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+  regex: /\bhttps?:\/\/[^\s:/@]+:[^\s/@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
   placeholder: "BASIC_AUTH_URL",
   description: "HTTP/HTTPS URL containing username and password credentials"
 };
@@ -259,8 +259,18 @@ var ipv6Pattern = {
   severity: "low",
   regex: /(?<![a-zA-Z0-9_:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|::[1])(?![a-zA-Z0-9_:])/gi,
   placeholder: "IPV6_ADDRESS",
-  description: "Standard or compressed 128-bit IPv6 address"
+  description: "Standard or compressed 128-bit IPv6 address",
+  validator: isLikelyIpv6
 };
+var IPV6_LOOPBACK = ["", "", "1"].join(":");
+function isLikelyIpv6(candidate) {
+  if (candidate === IPV6_LOOPBACK) return true;
+  const groups = candidate.split(":").filter((g) => g.length > 0);
+  if (groups.length < 2) return false;
+  if (!/[0-9]/.test(candidate)) return false;
+  if (groups.length === 2 && candidate.includes("::") && groups[0].length < 3) return false;
+  return true;
+}
 var phonePattern = {
   id: "phone-number",
   name: "Phone Number",
@@ -417,7 +427,9 @@ var Vault = class _Vault {
   restoreEntry(entry) {
     this.placeholderToEntry.set(entry.placeholder, entry);
     const existingList = this.placeholderToEntries.get(entry.placeholder) ?? [];
-    existingList.push(entry);
+    if (!existingList.some((e) => e.original === entry.original)) {
+      existingList.push(entry);
+    }
     this.placeholderToEntries.set(entry.placeholder, existingList);
     this.originalToPlaceholder.set(entry.original, entry.placeholder);
     const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
@@ -469,7 +481,7 @@ var Vault = class _Vault {
    * Number of unique secrets stored.
    */
   get size() {
-    return this.placeholderToEntries.size;
+    return this.originalToPlaceholder.size;
   }
   /**
    * Wipes all secrets from memory.
@@ -602,6 +614,12 @@ var RedactEngine = class {
           reversible
         });
         if (reversible && vault) {
+          const existingOriginal = vault.getOriginal(replacement);
+          if (existingOriginal !== void 0 && existingOriginal !== m.secret) {
+            throw new Error(
+              `customFormatter returned the same placeholder "${replacement}" for two different secrets. Reversible mode requires a unique placeholder per secret (e.g. include info.index or a hash).`
+            );
+          }
           vault.restoreEntry({
             placeholder: replacement,
             original: m.secret,

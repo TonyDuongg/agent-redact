@@ -139,7 +139,7 @@ export const databaseUrlPattern: RedactPattern = {
   name: 'Database Connection URL',
   category: 'credential',
   severity: 'critical',
-  regex: /\b(?:postgres|postgresql|mysql|mariadb|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:]*:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+  regex: /\b(?:postgres|postgresql|mysql|mariadb|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:/@]*:[^\s/@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
   placeholder: 'DATABASE_URL',
   description: 'Database connection URL containing user and password credentials'
 };
@@ -157,7 +157,7 @@ export const basicAuthUrlPattern: RedactPattern = {
   name: 'HTTP Basic Auth URL',
   category: 'credential',
   severity: 'critical',
-  regex: /\bhttps?:\/\/[^\s:]+:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+  regex: /\bhttps?:\/\/[^\s:/@]+:[^\s/@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
   placeholder: 'BASIC_AUTH_URL',
   description: 'HTTP/HTTPS URL containing username and password credentials'
 };

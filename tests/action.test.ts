@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runAction } from '../src/action/index.js';
@@ -46,10 +46,17 @@ describe('GitHub Action Runner (src/action/index.ts)', () => {
     const cleanFile = join(testDir, 'clean.js');
     writeFileSync(cleanFile, 'console.log("Clean code with zero secrets");', 'utf-8');
 
+    // Silence runner output so the test never prints workflow commands into CI logs
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
     await runAction();
 
-    const outputContent = existsSync(outputFile) ? vi.fn().mockReturnValue(true) : false;
-    expect(outputContent).toBeTruthy();
+    const outputs = readFileSync(outputFile, 'utf-8');
+    expect(outputs).toContain('has-leaks=false');
+    expect(outputs).toContain('total-leaks=0');
+    expect(readFileSync(summaryFile, 'utf-8')).toContain('No Leaks Found');
+
+    logSpy.mockRestore();
   });
 
   it('should detect leaked keys, emit annotations and format Markdown summary table', async () => {
@@ -62,7 +69,8 @@ describe('GitHub Action Runner (src/action/index.ts)', () => {
     const dirtyFile = join(testDir, 'server.env');
     writeFileSync(dirtyFile, `PORT=3000\nANTHROPIC_KEY=${antKey}\nHOST=localhost`, 'utf-8');
 
-    const consoleSpy = vi.spyOn(console, 'log');
+    // mockImplementation keeps the fake "::error" annotation out of real GitHub Actions logs
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     await runAction();
 

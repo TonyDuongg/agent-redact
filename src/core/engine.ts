@@ -180,6 +180,15 @@ export class RedactEngine {
           reversible
         });
         if (reversible && vault) {
+          // A shared placeholder for different secrets cannot be unmasked reliably:
+          // fail loudly instead of silently restoring the wrong secret later.
+          const existingOriginal = vault.getOriginal(replacement);
+          if (existingOriginal !== undefined && existingOriginal !== m.secret) {
+            throw new Error(
+              `customFormatter returned the same placeholder "${replacement}" for two different secrets. ` +
+                'Reversible mode requires a unique placeholder per secret (e.g. include info.index or a hash).'
+            );
+          }
           vault.restoreEntry({
             placeholder: replacement,
             original: m.secret,
