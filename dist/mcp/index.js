@@ -925,7 +925,7 @@ function createMcpServer(options = {}) {
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
   const server = new McpServer({
     name: "agent-redact",
-    version: "0.1.4"
+    version: "0.1.5"
   });
   server.tool(
     "redact_text",

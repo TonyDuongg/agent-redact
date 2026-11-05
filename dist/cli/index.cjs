@@ -970,7 +970,7 @@ function createMcpServer(options = {}) {
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
   const server = new mcp_js.McpServer({
     name: "agent-redact",
-    version: "0.1.4"
+    version: "0.1.5"
   });
   server.tool(
     "redact_text",
@@ -1350,7 +1350,7 @@ var colors = {
 };
 function printHelp() {
   const helpText = `
-${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.4${colors.reset}
+${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.5${colors.reset}
 ${colors.dim}Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents${colors.reset}
 
 ${colors.bold}USAGE:${colors.reset}
@@ -1408,7 +1408,7 @@ async function main() {
     process.exit(0);
   }
   if (args.includes("-v") || args.includes("--version")) {
-    console.log("agent-redact v0.1.4");
+    console.log("agent-redact v0.1.5");
     process.exit(0);
   }
   const VALUE_FLAGS = /* @__PURE__ */ new Set(["-o", "--output", "--vault-out", "--unmask", "--config"]);

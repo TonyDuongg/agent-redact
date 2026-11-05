@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.1.5] - 2026-11-05
 
 ### 🔒 Leak fixes
 - **Tokens whose last character is `-` were skipped.** Patterns over a base64url alphabet ended with `\b`, which cannot match between a final `-` and a following space or punctuation. Fixed-length patterns therefore missed the whole token (Telegram, GCP `GOCSPX-`, Google `AIza`, SendGrid, GitLab), about 1 token in 64. Variable-length ones (Anthropic, OpenAI project keys, Discord, JWT) left the final `-` visible. These patterns now end with `(?![A-Za-z0-9_])`, which behaves exactly like `\b` for every other ending.
