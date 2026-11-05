@@ -336,7 +336,8 @@ describe('Security Audit Fixes & Verification', () => {
             category: 'custom',
             severity: 'low',
             regex: /(?=a)/g,
-            placeholder: 'ZW'
+            placeholder: 'ZW',
+            description: 'Zero width test pattern'
           }
         ]
       });
