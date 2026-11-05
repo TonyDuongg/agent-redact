@@ -9,6 +9,25 @@ export class Vault {
   private placeholderToEntries = new Map<string, VaultEntry[]>();
   private originalToPlaceholder = new Map<string, string>();
   private counters = new Map<string, number>();
+  private maxEntries?: number;
+
+  constructor(options?: { maxEntries?: number }) {
+    this.maxEntries = options?.maxEntries;
+  }
+
+  private evictOldestIfNeeded(): void {
+    if (this.maxEntries && this.originalToPlaceholder.size >= this.maxEntries) {
+      const oldestPlaceholder = this.placeholderToEntry.keys().next().value;
+      if (oldestPlaceholder) {
+        const oldEntry = this.placeholderToEntry.get(oldestPlaceholder);
+        if (oldEntry) {
+          this.originalToPlaceholder.delete(oldEntry.original);
+        }
+        this.placeholderToEntry.delete(oldestPlaceholder);
+        this.placeholderToEntries.delete(oldestPlaceholder);
+      }
+    }
+  }
 
   /**
    * Retrieves an existing placeholder or allocates a new numbered placeholder
@@ -20,6 +39,8 @@ export class Vault {
     if (existing) {
       return existing;
     }
+
+    this.evictOldestIfNeeded();
 
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
@@ -93,6 +114,9 @@ export class Vault {
    * Directly restores an entry into the vault without altering placeholder names.
    */
   public restoreEntry(entry: VaultEntry): void {
+    if (!this.originalToPlaceholder.has(entry.original)) {
+      this.evictOldestIfNeeded();
+    }
     this.placeholderToEntry.set(entry.placeholder, entry);
     const existingList = this.placeholderToEntries.get(entry.placeholder) ?? [];
     // Restoring the same (placeholder, original) pair twice must be idempotent
@@ -135,10 +159,27 @@ export class Vault {
    */
   public static fromJSON(data: string | VaultEntry[]): Vault {
     const vault = new Vault();
-    const list: VaultEntry[] = typeof data === 'string' ? JSON.parse(data) : data;
-    if (Array.isArray(list)) {
-      vault.restoreEntries(list);
+    const list: unknown = typeof data === 'string' ? JSON.parse(data) : data;
+    if (!Array.isArray(list)) {
+      throw new Error('Invalid vault: expected a JSON array of entries');
     }
+    // Validate before restoring; error messages reference the index only, never the secret
+    list.forEach((entry: unknown, i: number) => {
+      const e = entry as Partial<VaultEntry> | null;
+      if (
+        !e ||
+        typeof e !== 'object' ||
+        typeof e.placeholder !== 'string' ||
+        e.placeholder.length === 0 ||
+        typeof e.original !== 'string' ||
+        e.original.length === 0
+      ) {
+        throw new Error(
+          `Invalid vault: entry ${i} must have non-empty string "placeholder" and "original" fields`
+        );
+      }
+    });
+    vault.restoreEntries(list as VaultEntry[]);
     return vault;
   }
 

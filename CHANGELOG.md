@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.4] - 2026-11-05
+
+### ⚠️ Behavior Change
+- **Capturing groups no longer cause partial redaction.** Previously, any regex with a capturing group redacted only group 1, so a custom pattern like `(acme|corp)_[A-Za-z0-9]{32}` left the token body visible. The whole match is now redacted unless the pattern declares `secretGroup` (number or name) or uses a named `(?<secret>...)` group. Built-in assignment patterns (AWS secret key, generic entropy) declare `secretGroup: 1` and are unchanged. Custom patterns that relied on implicit group 1 now redact more, never less.
+
+### 🔒 Leak Fixes & New Providers
+- **Added missing security providers:**
+  - Telegram bot tokens (`<digits>:<35 chars>`) -> `[REDACTED_TELEGRAM_BOT_TOKEN]`
+  - Twilio API keys (`SK...`) -> `[REDACTED_TWILIO_API_KEY]`
+  - Azure Storage Connection strings / AccountKeys -> `[REDACTED_AZURE_STORAGE_KEY]`
+  - GCP OAuth client secrets (`GOCSPX-...`) -> `[REDACTED_GCP_OAUTH_CLIENT_SECRET]`
+  - DigitalOcean Personal Access Tokens (`dop_v1_...`) -> `[REDACTED_DIGITALOCEAN_TOKEN]`
+  - Mailgun API keys (`key-...`) -> `[REDACTED_MAILGUN_API_KEY]`
+- **Pattern precision improvements:**
+  - Added Vietnamese landlines (`024`, `028`, and provincial `02x` codes) to phone pattern.
+  - Restricted credit card number separators to spaces and hyphens (`[- ]`), preventing digits split across lines in markdown tables from being falsely merged.
+  - Added lookbehind guard to IPv4 pattern (`(?<![vV])`) to prevent matching software version strings like `v1.0.0.1`.
+- **Stripe keys longer than 99 characters** were skipped entirely (bounded quantifier + `\b`); the pattern is now unbounded.
+- **Slack user/refresh tokens** (`xoxp-`/`xoxe-` with three numeric segments) were not detected.
+- **High-entropy secrets longer than `maxLength`** were cut at 120 characters, leaving the tail visible; the whole token is now redacted (entropy is judged on the first `maxLength` characters).
+- **Stream: oversized private key blocks** (>1 MB without END) leaked body lines that arrived in later chunks; the stream now keeps discarding until the END marker, including one split across chunks.
+
+### 🛡️ MCP Server Hardening
+- **File size cap (5 MB):** `scan_file` refuses files exceeding 5 MB to prevent context explosion and server timeouts.
+- **Binary file protection:** `scan_file` inspects the initial byte header and rejects binary files containing null bytes.
+- **Bounded session vault:** Session vault capped at 10,000 entries with automatic oldest entry eviction to prevent unbounded memory growth.
+- **Default root protection:** Does not default to filesystem root or user home directory without explicit `AGENT_REDACT_ALLOWED_DIR`.
+- **Preserved file permissions:** `scan_file({ inPlace })` preserves existing executable permissions on POSIX.
+
+### 🧯 CLI Hardening & Validation
+- **CLI `-r -i` without `--vault-out`** destroyed the original values (placeholders could never be restored); it now exits with code 2.
+- **CLI multi-file mode** rewrote earlier files and then aborted on an unreadable file before saving the vault; all inputs are now read first and the vault is written before any file is modified. Files without leaks are no longer rewritten.
+- **Strict CLI argument validation:** Rejects unknown flags (e.g. `--ouput`) and value flags missing arguments with exit code 2.
+- **Multi-file flag incompatibility check:** Refuses combinations of multiple input files with `-o`, `--unmask`, or `-j` with exit code 2.
+
+### 🧰 Validation & Tooling
+- Custom patterns missing `id`/`name`/`regex`/`placeholder` now fail with a clear error instead of producing `[REDACTED_undefined]`.
+- Engine `include` option preserves custom patterns and entropy detector.
+- `Vault.fromJSON` validates entries and reports the failing index without echoing secret values.
+- GitHub Action annotations escape `%`, `,`, `:` and newlines in file paths/messages per the workflow-command spec.
+- Entropy regex and `isHighEntropyToken` share one default `minLength` (20).
+- Added `.gitattributes` (`eol=lf`) so `dist/` source maps build identically on Windows and Linux CI.
+- README: documented `AGENT_REDACT_ALLOWED_DIR`, `.bak` backups, `secretGroup`, exact-match allowlist and fail-closed PEM streaming.
+
+---
+
 ## [0.1.3] - 2026-11-05
 
 ### 🔒 Security & Sandbox Hardening

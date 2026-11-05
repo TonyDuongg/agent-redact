@@ -32,6 +32,7 @@ var awsSecretKeyPattern = {
   category: "credential",
   severity: "critical",
   regex: /(?:aws_secret_access_key|aws_secret_key|secret_access_key)[\s=:'"]+([A-Za-z0-9\/+=]{40})(?:\s|$|['",;])/gi,
+  secretGroup: 1,
   placeholder: "AWS_SECRET_ACCESS_KEY",
   description: "Amazon Web Services 40-character Secret Access Key"
 };
@@ -49,7 +50,9 @@ var stripeKeyPattern = {
   name: "Stripe API Key",
   category: "credential",
   severity: "critical",
-  regex: /\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,99}\b/g,
+  // Unbounded: Stripe documents that key length may grow, and a bounded
+  // quantifier followed by \b silently skips longer keys entirely.
+  regex: /\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,}\b/g,
   placeholder: "STRIPE_API_KEY",
   description: "Stripe API key (live or test, secret or publishable)"
 };
@@ -85,7 +88,8 @@ var slackTokenPattern = {
   name: "Slack Token",
   category: "credential",
   severity: "high",
-  regex: /\b(?:xoxb|xoxp|xoxr|xoxa)-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b|\bxapp-[0-9]{1,}-[a-zA-Z0-9]{10,32}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b/g,
+  // Bot tokens have two numeric segments, user/refresh tokens have three
+  regex: /\b(?:xoxb|xoxp|xoxr|xoxa|xoxe|xoxs)-[0-9]{10,13}(?:-[0-9]{10,13}){1,2}-[a-zA-Z0-9]{24,34}\b|\bxapp-[0-9]{1,}-[a-zA-Z0-9]{10,32}-[0-9]{10,13}-[a-zA-Z0-9]{24,64}\b/g,
   placeholder: "SLACK_TOKEN",
   description: "Slack Bot, User, or App token"
 };
@@ -171,6 +175,60 @@ var supabaseKeyPattern = {
   placeholder: "SUPABASE_KEY",
   description: "Supabase Project or Management API key"
 };
+var telegramBotTokenPattern = {
+  id: "telegram-bot-token",
+  name: "Telegram Bot Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
+  placeholder: "TELEGRAM_BOT_TOKEN",
+  description: "Telegram Bot API authentication token"
+};
+var twilioApiKeyPattern = {
+  id: "twilio-api-key",
+  name: "Twilio API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bSK[0-9a-fA-F]{32}\b/g,
+  placeholder: "TWILIO_API_KEY",
+  description: "Twilio API Key starting with SK prefix"
+};
+var azureStorageKeyPattern = {
+  id: "azure-storage-key",
+  name: "Azure Storage Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bAccountKey=[A-Za-z0-9+/]{86}==|\bAccountKey=[A-Za-z0-9+/=]{88}\b/g,
+  placeholder: "AZURE_STORAGE_KEY",
+  description: "Azure Storage Account access key"
+};
+var gcpOauthSecretPattern = {
+  id: "gcp-oauth-client-secret",
+  name: "GCP OAuth Client Secret",
+  category: "credential",
+  severity: "critical",
+  regex: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/g,
+  placeholder: "GCP_OAUTH_CLIENT_SECRET",
+  description: "Google Cloud Platform OAuth 2.0 client secret"
+};
+var digitalOceanTokenPattern = {
+  id: "digitalocean-token",
+  name: "DigitalOcean Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\bdop_v1_[a-f0-9]{64}\b/g,
+  placeholder: "DIGITALOCEAN_TOKEN",
+  description: "DigitalOcean Personal Access Token"
+};
+var mailgunApiKeyPattern = {
+  id: "mailgun-api-key",
+  name: "Mailgun API Key",
+  category: "credential",
+  severity: "high",
+  regex: /\bkey-[0-9a-zA-Z]{32}\b/g,
+  placeholder: "MAILGUN_API_KEY",
+  description: "Mailgun API authentication key"
+};
 var CREDENTIAL_PATTERNS = [
   anthropicApiKeyPattern,
   openaiApiKeyPattern,
@@ -190,7 +248,13 @@ var CREDENTIAL_PATTERNS = [
   npmTokenPattern,
   sendgridApiKeyPattern,
   twilioAccountSidPattern,
-  supabaseKeyPattern
+  supabaseKeyPattern,
+  telegramBotTokenPattern,
+  twilioApiKeyPattern,
+  azureStorageKeyPattern,
+  gcpOauthSecretPattern,
+  digitalOceanTokenPattern,
+  mailgunApiKeyPattern
 ];
 
 // src/patterns/pii.ts
@@ -208,7 +272,7 @@ var ipv4Pattern = {
   name: "IPv4 Address",
   category: "network",
   severity: "low",
-  regex: /\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
+  regex: /(?<![vV])\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
   placeholder: "IPV4_ADDRESS",
   description: "Standard IPv4 network address"
 };
@@ -242,7 +306,7 @@ var creditCardPattern = {
   name: "Credit Card Number",
   category: "pii",
   severity: "critical",
-  regex: /\b(?:4[0-9]{3}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{1,4}|5[1-5][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|2[2-7][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|3[47][0-9]{2}[-\s]?[0-9]{6}[-\s]?[0-9]{5}|6(?:011|5[0-9]{2})[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4})\b/g,
+  regex: /\b(?:4[0-9]{3}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{1,4}|5[1-5][0-9]{2}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}|2[2-7][0-9]{2}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}|3[47][0-9]{2}[- ]?[0-9]{6}[- ]?[0-9]{5}|6(?:011|5[0-9]{2})[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4})\b/g,
   placeholder: "CREDIT_CARD",
   description: "Major credit card numbers (Visa, MasterCard, Amex, Discover)",
   validator: isValidLuhn
@@ -271,7 +335,7 @@ var phonePattern = {
   name: "Phone Number",
   category: "pii",
   severity: "medium",
-  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b)/g,
+  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b|(?<![\w$])\b02(?:[48][-.\s]?[0-9]{4}[-.\s]?[0-9]{4}|[0-35-79][0-9][-.\s]?[0-9]{3}[-.\s]?[0-9]{3,4})\b)/g,
   placeholder: "PHONE_NUMBER",
   description: "Telephone number in formatted local, international E.164, or domestic VN format"
 };
@@ -295,6 +359,6 @@ var PATTERN_MAP = new Map([
   // Alias for backwards compatibility
 ]);
 
-export { CREDENTIAL_PATTERNS, DEFAULT_PATTERNS, PATTERN_MAP, PII_PATTERNS, anthropicApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, basicAuthUrlPattern, creditCardPattern, databaseUriPattern, databaseUrlPattern, discordTokenPattern, emailPattern, githubTokenPattern, gitlabTokenPattern, googleApiKeyPattern, huggingFaceTokenPattern, ipv4Pattern, ipv6Pattern, jwtTokenPattern, npmTokenPattern, openaiApiKeyPattern, phonePattern, privateKeyPattern, sendgridApiKeyPattern, slackTokenPattern, ssnPattern, stripeKeyPattern, supabaseKeyPattern, twilioAccountSidPattern };
+export { CREDENTIAL_PATTERNS, DEFAULT_PATTERNS, PATTERN_MAP, PII_PATTERNS, anthropicApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, azureStorageKeyPattern, basicAuthUrlPattern, creditCardPattern, databaseUriPattern, databaseUrlPattern, digitalOceanTokenPattern, discordTokenPattern, emailPattern, gcpOauthSecretPattern, githubTokenPattern, gitlabTokenPattern, googleApiKeyPattern, huggingFaceTokenPattern, ipv4Pattern, ipv6Pattern, jwtTokenPattern, mailgunApiKeyPattern, npmTokenPattern, openaiApiKeyPattern, phonePattern, privateKeyPattern, sendgridApiKeyPattern, slackTokenPattern, ssnPattern, stripeKeyPattern, supabaseKeyPattern, telegramBotTokenPattern, twilioAccountSidPattern, twilioApiKeyPattern };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

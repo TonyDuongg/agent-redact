@@ -107,6 +107,8 @@ createReadStream('system-audit.log')
   .pipe(createWriteStream('sanitized-audit.log'));
 ```
 
+> **Fail-closed PEM handling**: private key blocks are buffered until their `-----END ...-----` marker (up to 1 MB). If a block never closes, everything from its `BEGIN` marker onward is replaced by `[REDACTED_PRIVATE_KEY]` rather than risking a partial leak, so later lines in a truncated stream may be dropped.
+
 #### Two-Way Reversible Masking & Unmasking (LLM Roundtrip)
 ```typescript
 import { redact, unmask } from 'agent-redact';
@@ -206,10 +208,21 @@ app.post('/api/agent', async (req, res) => {
       "name": "Corporate Microservice Token",
       "regex": "corp_live_[a-zA-Z0-9]{32}",
       "placeholder": "CORP_TOKEN"
+    },
+    {
+      "id": "corp-key-assignment",
+      "name": "Corporate key assignment",
+      "regex": "corp_key\\s*=\\s*(?<secret>[A-Za-z0-9]{24,})",
+      "placeholder": "CORP_KEY"
     }
   ]
 }
 ```
+
+* `id`, `name`, `regex` and `placeholder` are required; invalid entries stop the CLI with a clear error.
+* The **whole match** is redacted by default, even if the regex contains capturing groups (e.g. `(acme|corp)_...`).
+* To redact only part of the match, name that group `(?<secret>...)` or set `"secretGroup": 2` (group number or name).
+* `allowlist` entries are matched **exactly**; substrings are not exempted.
 
 ---
 
@@ -325,6 +338,26 @@ Add to `cline_mcp_settings.json`:
 > [!WARNING]
 > **MCP Context Isolation**: Files written by `unmask_text` contain plaintext secrets directly on disk. Ensure your agent prompts or tool permissions prohibit reading restored files back into the model context.
 
+#### File Sandbox (`AGENT_REDACT_ALLOWED_DIR`)
+
+`scan_file` and `unmask_text` only read/write inside the server's **working directory**, the **OS temp directory**, and the directory named by `AGENT_REDACT_ALLOWED_DIR`. Symlinks/junctions are resolved before the check, and writes inside any `.git` directory are refused.
+
+Some MCP clients start servers with an unexpected working directory (for example `/` or the app's install folder), which would make the sandbox far broader than intended. Pin it explicitly:
+
+```json
+{
+  "mcpServers": {
+    "agent-redact": {
+      "command": "npx",
+      "args": ["-y", "agent-redact-mcp"],
+      "env": { "AGENT_REDACT_ALLOWED_DIR": "/absolute/path/to/your/project" }
+    }
+  }
+}
+```
+
+`scan_file` with `inPlace: true` writes a `file.bak` (then `file.bak.1`, …) containing the **original plaintext** before sanitizing. Keep backups out of version control and delete them when done.
+
 ---
 
 ### 8. Multi-Language & Python Agents (LangChain, AutoGen, CrewAI)
@@ -414,7 +447,7 @@ Prevent accidental credential commits locally using [pre-commit](https://pre-com
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/TonyDuongg/agent-redact
-    rev: v0.1.3
+    rev: v0.1.4
     hooks:
       - id: agent-redact
 ```

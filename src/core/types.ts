@@ -21,6 +21,13 @@ export interface RedactPattern {
   description: string;
   /** Optional secondary validation function (e.g., Luhn check) */
   validator?: (match: string) => boolean;
+  /**
+   * Capturing group that holds the secret (number or group name), e.g. for
+   * `key=(value)` assignments. When omitted, a named group `(?<secret>...)` is
+   * used if present, otherwise the WHOLE match is redacted. Plain capturing
+   * groups used only for alternation no longer cause partial redaction.
+   */
+  secretGroup?: number | string;
 }
 
 export interface RedactMatch {

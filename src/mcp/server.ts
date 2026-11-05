@@ -9,10 +9,12 @@ import {
   openSync,
   closeSync,
   fchmodSync,
+  statSync,
+  readSync,
   constants as fsConstants
 } from 'node:fs';
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
 import { DEFAULT_PATTERNS } from '../patterns/index.js';
@@ -48,11 +50,19 @@ function realpathOrNearest(p: string): string {
 }
 
 function defaultAllowedRoots(): string[] {
-  return [
-    process.cwd(),
-    tmpdir(),
-    ...(process.env.AGENT_REDACT_ALLOWED_DIR ? [process.env.AGENT_REDACT_ALLOWED_DIR] : [])
-  ];
+  const roots: string[] = [];
+  if (process.env.AGENT_REDACT_ALLOWED_DIR) {
+    roots.push(process.env.AGENT_REDACT_ALLOWED_DIR);
+  }
+  const cwd = process.cwd();
+  const rootDir = resolve(sep);
+  const home = homedir();
+  // Avoid defaulting to filesystem root or user home directory without explicit AGENT_REDACT_ALLOWED_DIR
+  if (cwd !== rootDir && cwd !== home) {
+    roots.push(cwd);
+  }
+  roots.push(tmpdir());
+  return roots;
 }
 
 type PathCheck = { ok: true; realPath: string } | { ok: false; reason: string };
@@ -90,14 +100,21 @@ function checkPath(targetPath: string, roots: string[], mode: 'read' | 'write'):
 const SAFE_WRITE_FLAGS =
   fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0);
 
-function safeWriteFile(path: string, content: string, mode = 0o644): void {
-  const fd = openSync(path, SAFE_WRITE_FLAGS, mode);
+/**
+ * Writes through a no-follow descriptor. `enforceMode` is applied even to existing files
+ * (used for files that contain restored plaintext secrets); without it, an existing file
+ * keeps its permissions (e.g. an executable script stays executable) and new files get 0644.
+ */
+function safeWriteFile(path: string, content: string, enforceMode?: number): void {
+  const fd = openSync(path, SAFE_WRITE_FLAGS, enforceMode ?? 0o644);
   try {
     writeFileSync(fd, content, 'utf-8');
-    try {
-      fchmodSync(fd, mode);
-    } catch {
-      // fchmod may be unavailable or fail on Windows / non-POSIX
+    if (enforceMode !== undefined) {
+      try {
+        fchmodSync(fd, enforceMode);
+      } catch {
+        // fchmod may be unavailable or fail on Windows / non-POSIX
+      }
     }
   } finally {
     closeSync(fd);
@@ -126,12 +143,12 @@ function securityError(field: string, value: string, reason: string) {
 }
 
 export function createMcpServer(options: McpServerOptions = {}): McpServer {
-  const sessionVault = new Vault();
+  const sessionVault = new Vault({ maxEntries: 10_000 });
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
 
   const server = new McpServer({
     name: 'agent-redact',
-    version: '0.1.3'
+    version: '0.1.4'
   });
 
   // Tool 1: redact_text
@@ -274,6 +291,43 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
             }
           ]
         };
+      }
+
+      const MAX_SCAN_BYTES = 5 * 1024 * 1024; // 5 MB cap
+      const fileStat = statSync(resolvedFile);
+      if (fileStat.size > MAX_SCAN_BYTES) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `File size (${(fileStat.size / (1024 * 1024)).toFixed(2)} MB) exceeds maximum allowed limit of 5 MB.`
+            }
+          ]
+        };
+      }
+
+      // Skip binary files to prevent corrupting non-text data and leaking raw bytes
+      if (fileStat.size > 0) {
+        const checkBytes = Math.min(8192, fileStat.size);
+        const buf = Buffer.alloc(checkBytes);
+        const fd = openSync(resolvedFile, 'r');
+        try {
+          readSync(fd, buf, 0, checkBytes, 0);
+        } finally {
+          closeSync(fd);
+        }
+        if (buf.includes(0)) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: `Cannot scan binary file: ${filePath}`
+              }
+            ]
+          };
+        }
       }
 
       try {

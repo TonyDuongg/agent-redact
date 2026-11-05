@@ -39,6 +39,7 @@ var awsSecretKeyPattern = {
   category: "credential",
   severity: "critical",
   regex: /(?:aws_secret_access_key|aws_secret_key|secret_access_key)[\s=:'"]+([A-Za-z0-9\/+=]{40})(?:\s|$|['",;])/gi,
+  secretGroup: 1,
   placeholder: "AWS_SECRET_ACCESS_KEY",
   description: "Amazon Web Services 40-character Secret Access Key"
 };
@@ -56,7 +57,9 @@ var stripeKeyPattern = {
   name: "Stripe API Key",
   category: "credential",
   severity: "critical",
-  regex: /\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,99}\b/g,
+  // Unbounded: Stripe documents that key length may grow, and a bounded
+  // quantifier followed by \b silently skips longer keys entirely.
+  regex: /\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,}\b/g,
   placeholder: "STRIPE_API_KEY",
   description: "Stripe API key (live or test, secret or publishable)"
 };
@@ -92,7 +95,8 @@ var slackTokenPattern = {
   name: "Slack Token",
   category: "credential",
   severity: "high",
-  regex: /\b(?:xoxb|xoxp|xoxr|xoxa)-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b|\bxapp-[0-9]{1,}-[a-zA-Z0-9]{10,32}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b/g,
+  // Bot tokens have two numeric segments, user/refresh tokens have three
+  regex: /\b(?:xoxb|xoxp|xoxr|xoxa|xoxe|xoxs)-[0-9]{10,13}(?:-[0-9]{10,13}){1,2}-[a-zA-Z0-9]{24,34}\b|\bxapp-[0-9]{1,}-[a-zA-Z0-9]{10,32}-[0-9]{10,13}-[a-zA-Z0-9]{24,64}\b/g,
   placeholder: "SLACK_TOKEN",
   description: "Slack Bot, User, or App token"
 };
@@ -177,6 +181,60 @@ var supabaseKeyPattern = {
   placeholder: "SUPABASE_KEY",
   description: "Supabase Project or Management API key"
 };
+var telegramBotTokenPattern = {
+  id: "telegram-bot-token",
+  name: "Telegram Bot Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
+  placeholder: "TELEGRAM_BOT_TOKEN",
+  description: "Telegram Bot API authentication token"
+};
+var twilioApiKeyPattern = {
+  id: "twilio-api-key",
+  name: "Twilio API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bSK[0-9a-fA-F]{32}\b/g,
+  placeholder: "TWILIO_API_KEY",
+  description: "Twilio API Key starting with SK prefix"
+};
+var azureStorageKeyPattern = {
+  id: "azure-storage-key",
+  name: "Azure Storage Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bAccountKey=[A-Za-z0-9+/]{86}==|\bAccountKey=[A-Za-z0-9+/=]{88}\b/g,
+  placeholder: "AZURE_STORAGE_KEY",
+  description: "Azure Storage Account access key"
+};
+var gcpOauthSecretPattern = {
+  id: "gcp-oauth-client-secret",
+  name: "GCP OAuth Client Secret",
+  category: "credential",
+  severity: "critical",
+  regex: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/g,
+  placeholder: "GCP_OAUTH_CLIENT_SECRET",
+  description: "Google Cloud Platform OAuth 2.0 client secret"
+};
+var digitalOceanTokenPattern = {
+  id: "digitalocean-token",
+  name: "DigitalOcean Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\bdop_v1_[a-f0-9]{64}\b/g,
+  placeholder: "DIGITALOCEAN_TOKEN",
+  description: "DigitalOcean Personal Access Token"
+};
+var mailgunApiKeyPattern = {
+  id: "mailgun-api-key",
+  name: "Mailgun API Key",
+  category: "credential",
+  severity: "high",
+  regex: /\bkey-[0-9a-zA-Z]{32}\b/g,
+  placeholder: "MAILGUN_API_KEY",
+  description: "Mailgun API authentication key"
+};
 var CREDENTIAL_PATTERNS = [
   anthropicApiKeyPattern,
   openaiApiKeyPattern,
@@ -196,7 +254,13 @@ var CREDENTIAL_PATTERNS = [
   npmTokenPattern,
   sendgridApiKeyPattern,
   twilioAccountSidPattern,
-  supabaseKeyPattern
+  supabaseKeyPattern,
+  telegramBotTokenPattern,
+  twilioApiKeyPattern,
+  azureStorageKeyPattern,
+  gcpOauthSecretPattern,
+  digitalOceanTokenPattern,
+  mailgunApiKeyPattern
 ];
 
 // src/patterns/pii.ts
@@ -214,7 +278,7 @@ var ipv4Pattern = {
   name: "IPv4 Address",
   category: "network",
   severity: "low",
-  regex: /\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
+  regex: /(?<![vV])\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
   placeholder: "IPV4_ADDRESS",
   description: "Standard IPv4 network address"
 };
@@ -248,7 +312,7 @@ var creditCardPattern = {
   name: "Credit Card Number",
   category: "pii",
   severity: "critical",
-  regex: /\b(?:4[0-9]{3}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{1,4}|5[1-5][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|2[2-7][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|3[47][0-9]{2}[-\s]?[0-9]{6}[-\s]?[0-9]{5}|6(?:011|5[0-9]{2})[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4})\b/g,
+  regex: /\b(?:4[0-9]{3}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{1,4}|5[1-5][0-9]{2}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}|2[2-7][0-9]{2}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}|3[47][0-9]{2}[- ]?[0-9]{6}[- ]?[0-9]{5}|6(?:011|5[0-9]{2})[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4})\b/g,
   placeholder: "CREDIT_CARD",
   description: "Major credit card numbers (Visa, MasterCard, Amex, Discover)",
   validator: isValidLuhn
@@ -277,7 +341,7 @@ var phonePattern = {
   name: "Phone Number",
   category: "pii",
   severity: "medium",
-  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b)/g,
+  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b|(?<![\w$])\b02(?:[48][-.\s]?[0-9]{4}[-.\s]?[0-9]{4}|[0-35-79][0-9][-.\s]?[0-9]{3}[-.\s]?[0-9]{3,4})\b)/g,
   placeholder: "PHONE_NUMBER",
   description: "Telephone number in formatted local, international E.164, or domestic VN format"
 };
@@ -302,6 +366,8 @@ new Map([
 ]);
 
 // src/core/entropy.ts
+var DEFAULT_ENTROPY_MIN_LENGTH = 20;
+var DEFAULT_ENTROPY_MAX_LENGTH = 120;
 function calculateShannonEntropy(str) {
   if (!str || str.length === 0) {
     return 0;
@@ -320,8 +386,8 @@ function calculateShannonEntropy(str) {
   return Math.round(entropy * 1e3) / 1e3;
 }
 function isHighEntropyToken(token, config = {}) {
-  const minLength = config.minLength ?? 20;
-  const maxLength = config.maxLength ?? 120;
+  const minLength = config.minLength ?? DEFAULT_ENTROPY_MIN_LENGTH;
+  const maxLength = config.maxLength ?? DEFAULT_ENTROPY_MAX_LENGTH;
   const base64Threshold = config.base64Threshold ?? 4.3;
   const hexThreshold = config.hexThreshold ?? 3.2;
   if (token.length < minLength || token.length > maxLength) {
@@ -335,17 +401,17 @@ function isHighEntropyToken(token, config = {}) {
   return entropy >= base64Threshold;
 }
 function createHighEntropyPattern(config = {}) {
-  const min = config.minLength ?? 16;
-  const max = config.maxLength ?? 120;
+  const min = config.minLength ?? DEFAULT_ENTROPY_MIN_LENGTH;
   return {
     id: "generic-high-entropy-secret",
     name: "Generic High-Entropy Secret",
     category: "credential",
     severity: "high",
     regex: new RegExp(
-      `(?:api[_-]?key|secret|token|password|auth[_-]?key|access[_-]?key)[\\s=:'"]+([^\\s"';,\\n]{${min},${max}})`,
+      `(?:api[_-]?key|secret|token|password|auth[_-]?key|access[_-]?key)[\\s=:'"]+([^\\s"';,\\n]{${min},})`,
       "gi"
     ),
+    secretGroup: 1,
     placeholder: "GENERIC_SECRET",
     description: "High-entropy random token detected in sensitive assignment context"
   };
@@ -357,6 +423,23 @@ var Vault = class _Vault {
   placeholderToEntries = /* @__PURE__ */ new Map();
   originalToPlaceholder = /* @__PURE__ */ new Map();
   counters = /* @__PURE__ */ new Map();
+  maxEntries;
+  constructor(options) {
+    this.maxEntries = options?.maxEntries;
+  }
+  evictOldestIfNeeded() {
+    if (this.maxEntries && this.originalToPlaceholder.size >= this.maxEntries) {
+      const oldestPlaceholder = this.placeholderToEntry.keys().next().value;
+      if (oldestPlaceholder) {
+        const oldEntry = this.placeholderToEntry.get(oldestPlaceholder);
+        if (oldEntry) {
+          this.originalToPlaceholder.delete(oldEntry.original);
+        }
+        this.placeholderToEntry.delete(oldestPlaceholder);
+        this.placeholderToEntries.delete(oldestPlaceholder);
+      }
+    }
+  }
   /**
    * Retrieves an existing placeholder or allocates a new numbered placeholder
    * for the given secret token. Optionally ensures placeholder does not collide
@@ -367,6 +450,7 @@ var Vault = class _Vault {
     if (existing) {
       return existing;
     }
+    this.evictOldestIfNeeded();
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
       while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
@@ -426,6 +510,9 @@ var Vault = class _Vault {
    * Directly restores an entry into the vault without altering placeholder names.
    */
   restoreEntry(entry) {
+    if (!this.originalToPlaceholder.has(entry.original)) {
+      this.evictOldestIfNeeded();
+    }
     this.placeholderToEntry.set(entry.placeholder, entry);
     const existingList = this.placeholderToEntries.get(entry.placeholder) ?? [];
     if (!existingList.some((e) => e.original === entry.original)) {
@@ -463,9 +550,18 @@ var Vault = class _Vault {
   static fromJSON(data) {
     const vault = new _Vault();
     const list = typeof data === "string" ? JSON.parse(data) : data;
-    if (Array.isArray(list)) {
-      vault.restoreEntries(list);
+    if (!Array.isArray(list)) {
+      throw new Error("Invalid vault: expected a JSON array of entries");
     }
+    list.forEach((entry, i) => {
+      const e = entry;
+      if (!e || typeof e !== "object" || typeof e.placeholder !== "string" || e.placeholder.length === 0 || typeof e.original !== "string" || e.original.length === 0) {
+        throw new Error(
+          `Invalid vault: entry ${i} must have non-empty string "placeholder" and "original" fields`
+        );
+      }
+    });
+    vault.restoreEntries(list);
     return vault;
   }
   /**
@@ -502,6 +598,20 @@ var SEVERITY_WEIGHT = {
   medium: 2,
   low: 1
 };
+function selectSecretSpan(match, pattern) {
+  let group = pattern.secretGroup;
+  if (group === void 0 && match.groups?.["secret"] !== void 0) {
+    group = "secret";
+  }
+  if (group !== void 0) {
+    const value = typeof group === "number" ? match[group] : match.groups?.[group];
+    const span = typeof group === "number" ? match.indices?.[group] : match.indices?.groups?.[group];
+    if (value && span) {
+      return { secret: value, startIndex: span[0], endIndex: span[1] };
+    }
+  }
+  return { secret: match[0], startIndex: match.index, endIndex: match.index + match[0].length };
+}
 var RedactEngine = class {
   patterns;
   vault;
@@ -522,7 +632,10 @@ var RedactEngine = class {
     }
     if (options?.include && options.include.length > 0) {
       const includeSet = new Set(options.include);
-      activePatterns = activePatterns.filter((p) => includeSet.has(p.id));
+      const customIds = new Set((options.customPatterns ?? []).map((p) => p.id));
+      activePatterns = activePatterns.filter(
+        (p) => includeSet.has(p.id) || customIds.has(p.id) || options.detectHighEntropy && p.id === "generic-high-entropy-secret"
+      );
     }
     if (options?.exclude && options.exclude.length > 0) {
       const excludeSet = new Set(options.exclude);
@@ -541,33 +654,20 @@ var RedactEngine = class {
           regex.lastIndex++;
           continue;
         }
-        let secret;
-        let startIndex;
-        let endIndex;
-        if (match[1] !== void 0 && match[1].length > 0) {
-          secret = match[1];
-          const indices = match.indices;
-          if (indices && indices[1]) {
-            startIndex = indices[1][0];
-            endIndex = indices[1][1];
-          } else {
-            const offsetInMatch = match[0].indexOf(secret);
-            startIndex = match.index + offsetInMatch;
-            endIndex = startIndex + secret.length;
-          }
-        } else {
-          secret = match[0];
-          startIndex = match.index;
-          endIndex = startIndex + secret.length;
-        }
+        const { secret, startIndex, endIndex } = selectSecretSpan(match, pattern);
         if (allowlist.length > 0 && allowlist.some((al) => typeof al === "string" && al.length > 0 && secret === al)) {
           continue;
         }
         if (pattern.validator && !pattern.validator(secret)) {
           continue;
         }
-        if (pattern.id === "generic-high-entropy-secret" && !isHighEntropyToken(secret, options?.entropy)) {
-          continue;
+        if (pattern.id === "generic-high-entropy-secret") {
+          const entropyConfig = options?.entropy;
+          const maxLength = entropyConfig?.maxLength ?? DEFAULT_ENTROPY_MAX_LENGTH;
+          const sample = secret.length > maxLength ? secret.slice(0, maxLength) : secret;
+          if (!isHighEntropyToken(sample, entropyConfig)) {
+            continue;
+          }
         }
         rawMatches.push({
           pattern,
@@ -712,6 +812,16 @@ function parseRegexString(patternStr) {
   return new RegExp(patternStr, "g");
 }
 function resolveCustomPattern(cfg) {
+  const label = typeof cfg?.id === "string" && cfg.id ? `"${cfg.id}"` : "(missing id)";
+  for (const field of ["id", "name", "regex", "placeholder"]) {
+    const value = cfg?.[field];
+    if (typeof value !== "string" || value.trim().length === 0) {
+      throw new Error(`Custom pattern ${label}: "${field}" must be a non-empty string`);
+    }
+  }
+  if (cfg.secretGroup !== void 0 && !(typeof cfg.secretGroup === "number" && Number.isInteger(cfg.secretGroup) && cfg.secretGroup > 0 || typeof cfg.secretGroup === "string" && cfg.secretGroup.length > 0)) {
+    throw new Error(`Custom pattern ${label}: "secretGroup" must be a positive integer or a group name`);
+  }
   return {
     id: cfg.id,
     name: cfg.name,
@@ -719,7 +829,8 @@ function resolveCustomPattern(cfg) {
     severity: cfg.severity ?? "high",
     regex: parseRegexString(cfg.regex),
     placeholder: cfg.placeholder,
-    description: cfg.description ?? cfg.name
+    description: cfg.description ?? cfg.name,
+    ...cfg.secretGroup !== void 0 ? { secretGroup: cfg.secretGroup } : {}
   };
 }
 function loadConfig(explicitPath, searchDir = process.cwd()) {
@@ -822,6 +933,12 @@ function collectFiles(dir, excludeDirs, result = []) {
   }
   return result;
 }
+function escapeCommandData(value) {
+  return value.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+function escapeCommandProperty(value) {
+  return escapeCommandData(value).replace(/:/g, "%3A").replace(/,/g, "%2C");
+}
 function calculateLineNumber(content, index) {
   return content.slice(0, index).split("\n").length;
 }
@@ -870,9 +987,11 @@ async function runAction() {
       for (const match of result.matches) {
         const line = calculateLineNumber(content, match.startIndex);
         allLeaks.push({ file: relPath, line, match });
-        console.log(
-          `::error file=${relPath},line=${line}::[agent-redact] Leaked ${match.patternName} (${match.severity.toUpperCase()}) detected!`
+        const annotationPath = escapeCommandProperty(relPath.replace(/\\/g, "/"));
+        const message = escapeCommandData(
+          `[agent-redact] Leaked ${match.patternName} (${match.severity.toUpperCase()}) detected!`
         );
+        console.log(`::error file=${annotationPath},line=${line}::${message}`);
       }
     }
   }

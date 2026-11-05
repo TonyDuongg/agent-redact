@@ -43,6 +43,13 @@ interface RedactPattern {
     description: string;
     /** Optional secondary validation function (e.g., Luhn check) */
     validator?: (match: string) => boolean;
+    /**
+     * Capturing group that holds the secret (number or group name), e.g. for
+     * `key=(value)` assignments. When omitted, a named group `(?<secret>...)` is
+     * used if present, otherwise the WHOLE match is redacted. Plain capturing
+     * groups used only for alternation no longer cause partial redaction.
+     */
+    secretGroup?: number | string;
 }
 interface RedactMatch {
     patternId: string;
@@ -209,6 +216,30 @@ declare const twilioAccountSidPattern: RedactPattern;
  */
 declare const supabaseKeyPattern: RedactPattern;
 /**
+ * Telegram Bot Token (<bot-id>:<35-char-token>)
+ */
+declare const telegramBotTokenPattern: RedactPattern;
+/**
+ * Twilio API Key (SK...)
+ */
+declare const twilioApiKeyPattern: RedactPattern;
+/**
+ * Azure Storage Connection String / AccountKey
+ */
+declare const azureStorageKeyPattern: RedactPattern;
+/**
+ * GCP OAuth Client Secret (GOCSPX-...)
+ */
+declare const gcpOauthSecretPattern: RedactPattern;
+/**
+ * DigitalOcean Personal Access Token (dop_v1_...)
+ */
+declare const digitalOceanTokenPattern: RedactPattern;
+/**
+ * Mailgun API Key (key-...)
+ */
+declare const mailgunApiKeyPattern: RedactPattern;
+/**
  * Export array of all built-in credential patterns
  */
 declare const CREDENTIAL_PATTERNS: RedactPattern[];
@@ -251,4 +282,4 @@ declare const DEFAULT_PATTERNS: RedactPattern[];
  */
 declare const PATTERN_MAP: ReadonlyMap<string, RedactPattern>;
 
-export { phonePattern as A, privateKeyPattern as B, CREDENTIAL_PATTERNS as C, DEFAULT_PATTERNS as D, type EntropyConfig as E, sendgridApiKeyPattern as F, slackTokenPattern as G, ssnPattern as H, stripeKeyPattern as I, supabaseKeyPattern as J, twilioAccountSidPattern as K, PATTERN_MAP as P, type RedactPattern as R, type SecretCategory as S, type VaultEntry as V, type RedactOptions as a, type RedactResult as b, type Severity as c, PII_PATTERNS as d, type RedactMatch as e, anthropicApiKeyPattern as f, awsAccessKeyPattern as g, awsSecretKeyPattern as h, basicAuthUrlPattern as i, calculateShannonEntropy as j, createHighEntropyPattern as k, creditCardPattern as l, databaseUriPattern as m, databaseUrlPattern as n, discordTokenPattern as o, emailPattern as p, githubTokenPattern as q, gitlabTokenPattern as r, googleApiKeyPattern as s, huggingFaceTokenPattern as t, ipv4Pattern as u, ipv6Pattern as v, isHighEntropyToken as w, jwtTokenPattern as x, npmTokenPattern as y, openaiApiKeyPattern as z };
+export { jwtTokenPattern as A, mailgunApiKeyPattern as B, CREDENTIAL_PATTERNS as C, DEFAULT_PATTERNS as D, type EntropyConfig as E, npmTokenPattern as F, openaiApiKeyPattern as G, phonePattern as H, privateKeyPattern as I, sendgridApiKeyPattern as J, slackTokenPattern as K, ssnPattern as L, stripeKeyPattern as M, supabaseKeyPattern as N, telegramBotTokenPattern as O, PATTERN_MAP as P, twilioAccountSidPattern as Q, type RedactPattern as R, type SecretCategory as S, twilioApiKeyPattern as T, type VaultEntry as V, type RedactOptions as a, type RedactResult as b, type Severity as c, PII_PATTERNS as d, type RedactMatch as e, anthropicApiKeyPattern as f, awsAccessKeyPattern as g, awsSecretKeyPattern as h, azureStorageKeyPattern as i, basicAuthUrlPattern as j, calculateShannonEntropy as k, createHighEntropyPattern as l, creditCardPattern as m, databaseUriPattern as n, databaseUrlPattern as o, digitalOceanTokenPattern as p, discordTokenPattern as q, emailPattern as r, gcpOauthSecretPattern as s, githubTokenPattern as t, gitlabTokenPattern as u, googleApiKeyPattern as v, huggingFaceTokenPattern as w, ipv4Pattern as x, ipv6Pattern as y, isHighEntropyToken as z };

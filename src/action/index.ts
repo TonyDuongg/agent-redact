@@ -68,6 +68,15 @@ function collectFiles(
   return result;
 }
 
+/** Escaping rules for GitHub workflow command data and properties (see @actions/core) */
+function escapeCommandData(value: string): string {
+  return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+}
+
+function escapeCommandProperty(value: string): string {
+  return escapeCommandData(value).replace(/:/g, '%3A').replace(/,/g, '%2C');
+}
+
 function calculateLineNumber(content: string, index: number): number {
   return content.slice(0, index).split('\n').length;
 }
@@ -128,9 +137,12 @@ export async function runAction(): Promise<void> {
         allLeaks.push({ file: relPath, line, match });
 
         // Emit GitHub annotation for PR diffs
-        console.log(
-          `::error file=${relPath},line=${line}::[agent-redact] Leaked ${match.patternName} (${match.severity.toUpperCase()}) detected!`
+        // Unescaped ',' or ':' in a path would corrupt the annotation's properties
+        const annotationPath = escapeCommandProperty(relPath.replace(/\\/g, '/'));
+        const message = escapeCommandData(
+          `[agent-redact] Leaked ${match.patternName} (${match.severity.toUpperCase()}) detected!`
         );
+        console.log(`::error file=${annotationPath},line=${line}::${message}`);
       }
     }
   }

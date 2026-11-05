@@ -19,7 +19,7 @@ var __export = (target, all) => {
 };
 
 // src/patterns/credentials.ts
-var anthropicApiKeyPattern, openaiApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, githubTokenPattern, stripeKeyPattern, jwtTokenPattern, privateKeyPattern, googleApiKeyPattern, slackTokenPattern, databaseUrlPattern, basicAuthUrlPattern, huggingFaceTokenPattern, gitlabTokenPattern, discordTokenPattern, npmTokenPattern, sendgridApiKeyPattern, twilioAccountSidPattern, supabaseKeyPattern, CREDENTIAL_PATTERNS;
+var anthropicApiKeyPattern, openaiApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, githubTokenPattern, stripeKeyPattern, jwtTokenPattern, privateKeyPattern, googleApiKeyPattern, slackTokenPattern, databaseUrlPattern, basicAuthUrlPattern, huggingFaceTokenPattern, gitlabTokenPattern, discordTokenPattern, npmTokenPattern, sendgridApiKeyPattern, twilioAccountSidPattern, supabaseKeyPattern, telegramBotTokenPattern, twilioApiKeyPattern, azureStorageKeyPattern, gcpOauthSecretPattern, digitalOceanTokenPattern, mailgunApiKeyPattern, CREDENTIAL_PATTERNS;
 var init_credentials = __esm({
   "src/patterns/credentials.ts"() {
     anthropicApiKeyPattern = {
@@ -55,6 +55,7 @@ var init_credentials = __esm({
       category: "credential",
       severity: "critical",
       regex: /(?:aws_secret_access_key|aws_secret_key|secret_access_key)[\s=:'"]+([A-Za-z0-9\/+=]{40})(?:\s|$|['",;])/gi,
+      secretGroup: 1,
       placeholder: "AWS_SECRET_ACCESS_KEY",
       description: "Amazon Web Services 40-character Secret Access Key"
     };
@@ -72,7 +73,9 @@ var init_credentials = __esm({
       name: "Stripe API Key",
       category: "credential",
       severity: "critical",
-      regex: /\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,99}\b/g,
+      // Unbounded: Stripe documents that key length may grow, and a bounded
+      // quantifier followed by \b silently skips longer keys entirely.
+      regex: /\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,}\b/g,
       placeholder: "STRIPE_API_KEY",
       description: "Stripe API key (live or test, secret or publishable)"
     };
@@ -108,7 +111,8 @@ var init_credentials = __esm({
       name: "Slack Token",
       category: "credential",
       severity: "high",
-      regex: /\b(?:xoxb|xoxp|xoxr|xoxa)-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b|\bxapp-[0-9]{1,}-[a-zA-Z0-9]{10,32}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b/g,
+      // Bot tokens have two numeric segments, user/refresh tokens have three
+      regex: /\b(?:xoxb|xoxp|xoxr|xoxa|xoxe|xoxs)-[0-9]{10,13}(?:-[0-9]{10,13}){1,2}-[a-zA-Z0-9]{24,34}\b|\bxapp-[0-9]{1,}-[a-zA-Z0-9]{10,32}-[0-9]{10,13}-[a-zA-Z0-9]{24,64}\b/g,
       placeholder: "SLACK_TOKEN",
       description: "Slack Bot, User, or App token"
     };
@@ -193,6 +197,60 @@ var init_credentials = __esm({
       placeholder: "SUPABASE_KEY",
       description: "Supabase Project or Management API key"
     };
+    telegramBotTokenPattern = {
+      id: "telegram-bot-token",
+      name: "Telegram Bot Token",
+      category: "credential",
+      severity: "critical",
+      regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
+      placeholder: "TELEGRAM_BOT_TOKEN",
+      description: "Telegram Bot API authentication token"
+    };
+    twilioApiKeyPattern = {
+      id: "twilio-api-key",
+      name: "Twilio API Key",
+      category: "credential",
+      severity: "critical",
+      regex: /\bSK[0-9a-fA-F]{32}\b/g,
+      placeholder: "TWILIO_API_KEY",
+      description: "Twilio API Key starting with SK prefix"
+    };
+    azureStorageKeyPattern = {
+      id: "azure-storage-key",
+      name: "Azure Storage Key",
+      category: "credential",
+      severity: "critical",
+      regex: /\bAccountKey=[A-Za-z0-9+/]{86}==|\bAccountKey=[A-Za-z0-9+/=]{88}\b/g,
+      placeholder: "AZURE_STORAGE_KEY",
+      description: "Azure Storage Account access key"
+    };
+    gcpOauthSecretPattern = {
+      id: "gcp-oauth-client-secret",
+      name: "GCP OAuth Client Secret",
+      category: "credential",
+      severity: "critical",
+      regex: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/g,
+      placeholder: "GCP_OAUTH_CLIENT_SECRET",
+      description: "Google Cloud Platform OAuth 2.0 client secret"
+    };
+    digitalOceanTokenPattern = {
+      id: "digitalocean-token",
+      name: "DigitalOcean Token",
+      category: "credential",
+      severity: "critical",
+      regex: /\bdop_v1_[a-f0-9]{64}\b/g,
+      placeholder: "DIGITALOCEAN_TOKEN",
+      description: "DigitalOcean Personal Access Token"
+    };
+    mailgunApiKeyPattern = {
+      id: "mailgun-api-key",
+      name: "Mailgun API Key",
+      category: "credential",
+      severity: "high",
+      regex: /\bkey-[0-9a-zA-Z]{32}\b/g,
+      placeholder: "MAILGUN_API_KEY",
+      description: "Mailgun API authentication key"
+    };
     CREDENTIAL_PATTERNS = [
       anthropicApiKeyPattern,
       openaiApiKeyPattern,
@@ -212,7 +270,13 @@ var init_credentials = __esm({
       npmTokenPattern,
       sendgridApiKeyPattern,
       twilioAccountSidPattern,
-      supabaseKeyPattern
+      supabaseKeyPattern,
+      telegramBotTokenPattern,
+      twilioApiKeyPattern,
+      azureStorageKeyPattern,
+      gcpOauthSecretPattern,
+      digitalOceanTokenPattern,
+      mailgunApiKeyPattern
     ];
   }
 });
@@ -259,7 +323,7 @@ var init_pii = __esm({
       name: "IPv4 Address",
       category: "network",
       severity: "low",
-      regex: /\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
+      regex: /(?<![vV])\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
       placeholder: "IPV4_ADDRESS",
       description: "Standard IPv4 network address"
     };
@@ -277,7 +341,7 @@ var init_pii = __esm({
       name: "Credit Card Number",
       category: "pii",
       severity: "critical",
-      regex: /\b(?:4[0-9]{3}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{1,4}|5[1-5][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|2[2-7][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|3[47][0-9]{2}[-\s]?[0-9]{6}[-\s]?[0-9]{5}|6(?:011|5[0-9]{2})[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4})\b/g,
+      regex: /\b(?:4[0-9]{3}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{1,4}|5[1-5][0-9]{2}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}|2[2-7][0-9]{2}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}|3[47][0-9]{2}[- ]?[0-9]{6}[- ]?[0-9]{5}|6(?:011|5[0-9]{2})[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4})\b/g,
       placeholder: "CREDIT_CARD",
       description: "Major credit card numbers (Visa, MasterCard, Amex, Discover)",
       validator: isValidLuhn
@@ -298,7 +362,7 @@ var init_pii = __esm({
       name: "Phone Number",
       category: "pii",
       severity: "medium",
-      regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b)/g,
+      regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b|(?<![\w$])\b02(?:[48][-.\s]?[0-9]{4}[-.\s]?[0-9]{4}|[0-35-79][0-9][-.\s]?[0-9]{3}[-.\s]?[0-9]{3,4})\b)/g,
       placeholder: "PHONE_NUMBER",
       description: "Telephone number in formatted local, international E.164, or domestic VN format"
     };
@@ -352,8 +416,8 @@ function calculateShannonEntropy(str) {
   return Math.round(entropy * 1e3) / 1e3;
 }
 function isHighEntropyToken(token, config = {}) {
-  const minLength = config.minLength ?? 20;
-  const maxLength = config.maxLength ?? 120;
+  const minLength = config.minLength ?? DEFAULT_ENTROPY_MIN_LENGTH;
+  const maxLength = config.maxLength ?? DEFAULT_ENTROPY_MAX_LENGTH;
   const base64Threshold = config.base64Threshold ?? 4.3;
   const hexThreshold = config.hexThreshold ?? 3.2;
   if (token.length < minLength || token.length > maxLength) {
@@ -367,23 +431,26 @@ function isHighEntropyToken(token, config = {}) {
   return entropy >= base64Threshold;
 }
 function createHighEntropyPattern(config = {}) {
-  const min = config.minLength ?? 16;
-  const max = config.maxLength ?? 120;
+  const min = config.minLength ?? DEFAULT_ENTROPY_MIN_LENGTH;
   return {
     id: "generic-high-entropy-secret",
     name: "Generic High-Entropy Secret",
     category: "credential",
     severity: "high",
     regex: new RegExp(
-      `(?:api[_-]?key|secret|token|password|auth[_-]?key|access[_-]?key)[\\s=:'"]+([^\\s"';,\\n]{${min},${max}})`,
+      `(?:api[_-]?key|secret|token|password|auth[_-]?key|access[_-]?key)[\\s=:'"]+([^\\s"';,\\n]{${min},})`,
       "gi"
     ),
+    secretGroup: 1,
     placeholder: "GENERIC_SECRET",
     description: "High-entropy random token detected in sensitive assignment context"
   };
 }
+var DEFAULT_ENTROPY_MIN_LENGTH, DEFAULT_ENTROPY_MAX_LENGTH;
 var init_entropy = __esm({
   "src/core/entropy.ts"() {
+    DEFAULT_ENTROPY_MIN_LENGTH = 20;
+    DEFAULT_ENTROPY_MAX_LENGTH = 120;
   }
 });
 
@@ -396,6 +463,23 @@ var init_vault = __esm({
       placeholderToEntries = /* @__PURE__ */ new Map();
       originalToPlaceholder = /* @__PURE__ */ new Map();
       counters = /* @__PURE__ */ new Map();
+      maxEntries;
+      constructor(options) {
+        this.maxEntries = options?.maxEntries;
+      }
+      evictOldestIfNeeded() {
+        if (this.maxEntries && this.originalToPlaceholder.size >= this.maxEntries) {
+          const oldestPlaceholder = this.placeholderToEntry.keys().next().value;
+          if (oldestPlaceholder) {
+            const oldEntry = this.placeholderToEntry.get(oldestPlaceholder);
+            if (oldEntry) {
+              this.originalToPlaceholder.delete(oldEntry.original);
+            }
+            this.placeholderToEntry.delete(oldestPlaceholder);
+            this.placeholderToEntries.delete(oldestPlaceholder);
+          }
+        }
+      }
       /**
        * Retrieves an existing placeholder or allocates a new numbered placeholder
        * for the given secret token. Optionally ensures placeholder does not collide
@@ -406,6 +490,7 @@ var init_vault = __esm({
         if (existing) {
           return existing;
         }
+        this.evictOldestIfNeeded();
         let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
         if (existingText) {
           while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
@@ -465,6 +550,9 @@ var init_vault = __esm({
        * Directly restores an entry into the vault without altering placeholder names.
        */
       restoreEntry(entry) {
+        if (!this.originalToPlaceholder.has(entry.original)) {
+          this.evictOldestIfNeeded();
+        }
         this.placeholderToEntry.set(entry.placeholder, entry);
         const existingList = this.placeholderToEntries.get(entry.placeholder) ?? [];
         if (!existingList.some((e) => e.original === entry.original)) {
@@ -502,9 +590,18 @@ var init_vault = __esm({
       static fromJSON(data) {
         const vault = new _Vault();
         const list = typeof data === "string" ? JSON.parse(data) : data;
-        if (Array.isArray(list)) {
-          vault.restoreEntries(list);
+        if (!Array.isArray(list)) {
+          throw new Error("Invalid vault: expected a JSON array of entries");
         }
+        list.forEach((entry, i) => {
+          const e = entry;
+          if (!e || typeof e !== "object" || typeof e.placeholder !== "string" || e.placeholder.length === 0 || typeof e.original !== "string" || e.original.length === 0) {
+            throw new Error(
+              `Invalid vault: entry ${i} must have non-empty string "placeholder" and "original" fields`
+            );
+          }
+        });
+        vault.restoreEntries(list);
         return vault;
       }
       /**
@@ -537,6 +634,20 @@ var init_vault = __esm({
 });
 
 // src/core/engine.ts
+function selectSecretSpan(match, pattern) {
+  let group = pattern.secretGroup;
+  if (group === void 0 && match.groups?.["secret"] !== void 0) {
+    group = "secret";
+  }
+  if (group !== void 0) {
+    const value = typeof group === "number" ? match[group] : match.groups?.[group];
+    const span = typeof group === "number" ? match.indices?.[group] : match.indices?.groups?.[group];
+    if (value && span) {
+      return { secret: value, startIndex: span[0], endIndex: span[1] };
+    }
+  }
+  return { secret: match[0], startIndex: match.index, endIndex: match.index + match[0].length };
+}
 function redact(text, options) {
   return defaultEngine.redact(text, options);
 }
@@ -575,7 +686,10 @@ var init_engine = __esm({
         }
         if (options?.include && options.include.length > 0) {
           const includeSet = new Set(options.include);
-          activePatterns = activePatterns.filter((p) => includeSet.has(p.id));
+          const customIds = new Set((options.customPatterns ?? []).map((p) => p.id));
+          activePatterns = activePatterns.filter(
+            (p) => includeSet.has(p.id) || customIds.has(p.id) || options.detectHighEntropy && p.id === "generic-high-entropy-secret"
+          );
         }
         if (options?.exclude && options.exclude.length > 0) {
           const excludeSet = new Set(options.exclude);
@@ -594,33 +708,20 @@ var init_engine = __esm({
               regex.lastIndex++;
               continue;
             }
-            let secret;
-            let startIndex;
-            let endIndex;
-            if (match[1] !== void 0 && match[1].length > 0) {
-              secret = match[1];
-              const indices = match.indices;
-              if (indices && indices[1]) {
-                startIndex = indices[1][0];
-                endIndex = indices[1][1];
-              } else {
-                const offsetInMatch = match[0].indexOf(secret);
-                startIndex = match.index + offsetInMatch;
-                endIndex = startIndex + secret.length;
-              }
-            } else {
-              secret = match[0];
-              startIndex = match.index;
-              endIndex = startIndex + secret.length;
-            }
+            const { secret, startIndex, endIndex } = selectSecretSpan(match, pattern);
             if (allowlist.length > 0 && allowlist.some((al) => typeof al === "string" && al.length > 0 && secret === al)) {
               continue;
             }
             if (pattern.validator && !pattern.validator(secret)) {
               continue;
             }
-            if (pattern.id === "generic-high-entropy-secret" && !isHighEntropyToken(secret, options?.entropy)) {
-              continue;
+            if (pattern.id === "generic-high-entropy-secret") {
+              const entropyConfig = options?.entropy;
+              const maxLength = entropyConfig?.maxLength ?? DEFAULT_ENTROPY_MAX_LENGTH;
+              const sample = secret.length > maxLength ? secret.slice(0, maxLength) : secret;
+              if (!isHighEntropyToken(sample, entropyConfig)) {
+                continue;
+              }
             }
             rawMatches.push({
               pattern,
@@ -774,11 +875,18 @@ function realpathOrNearest(p) {
   }
 }
 function defaultAllowedRoots() {
-  return [
-    process.cwd(),
-    os.tmpdir(),
-    ...process.env.AGENT_REDACT_ALLOWED_DIR ? [process.env.AGENT_REDACT_ALLOWED_DIR] : []
-  ];
+  const roots = [];
+  if (process.env.AGENT_REDACT_ALLOWED_DIR) {
+    roots.push(process.env.AGENT_REDACT_ALLOWED_DIR);
+  }
+  const cwd = process.cwd();
+  const rootDir = path.resolve(path.sep);
+  const home = os.homedir();
+  if (cwd !== rootDir && cwd !== home) {
+    roots.push(cwd);
+  }
+  roots.push(os.tmpdir());
+  return roots;
 }
 function checkPath(targetPath, roots, mode) {
   const realTarget = realpathOrNearest(targetPath);
@@ -799,13 +907,15 @@ function checkPath(targetPath, roots, mode) {
   }
   return { ok: false, reason: "outside the allowed directories (workspace or temp)" };
 }
-function safeWriteFile(path, content, mode = 420) {
-  const fd = fs.openSync(path, SAFE_WRITE_FLAGS, mode);
+function safeWriteFile(path, content, enforceMode) {
+  const fd = fs.openSync(path, SAFE_WRITE_FLAGS, enforceMode ?? 420);
   try {
     fs.writeFileSync(fd, content, "utf-8");
-    try {
-      fs.fchmodSync(fd, mode);
-    } catch {
+    if (enforceMode !== void 0) {
+      try {
+        fs.fchmodSync(fd, enforceMode);
+      } catch {
+      }
     }
   } finally {
     fs.closeSync(fd);
@@ -830,11 +940,11 @@ function securityError(field, value, reason) {
   };
 }
 function createMcpServer(options = {}) {
-  const sessionVault = new Vault();
+  const sessionVault = new Vault({ maxEntries: 1e4 });
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
   const server = new mcp_js.McpServer({
     name: "agent-redact",
-    version: "0.1.3"
+    version: "0.1.4"
   });
   server.tool(
     "redact_text",
@@ -951,6 +1061,40 @@ function createMcpServer(options = {}) {
             }
           ]
         };
+      }
+      const MAX_SCAN_BYTES = 5 * 1024 * 1024;
+      const fileStat = fs.statSync(resolvedFile);
+      if (fileStat.size > MAX_SCAN_BYTES) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `File size (${(fileStat.size / (1024 * 1024)).toFixed(2)} MB) exceeds maximum allowed limit of 5 MB.`
+            }
+          ]
+        };
+      }
+      if (fileStat.size > 0) {
+        const checkBytes = Math.min(8192, fileStat.size);
+        const buf = Buffer.alloc(checkBytes);
+        const fd = fs.openSync(resolvedFile, "r");
+        try {
+          fs.readSync(fd, buf, 0, checkBytes, 0);
+        } finally {
+          fs.closeSync(fd);
+        }
+        if (buf.includes(0)) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `Cannot scan binary file: ${filePath}`
+              }
+            ]
+          };
+        }
       }
       try {
         const rawContent = fs.readFileSync(resolvedFile, "utf-8");
@@ -1101,6 +1245,16 @@ function parseRegexString(patternStr) {
   return new RegExp(patternStr, "g");
 }
 function resolveCustomPattern(cfg) {
+  const label = typeof cfg?.id === "string" && cfg.id ? `"${cfg.id}"` : "(missing id)";
+  for (const field of ["id", "name", "regex", "placeholder"]) {
+    const value = cfg?.[field];
+    if (typeof value !== "string" || value.trim().length === 0) {
+      throw new Error(`Custom pattern ${label}: "${field}" must be a non-empty string`);
+    }
+  }
+  if (cfg.secretGroup !== void 0 && !(typeof cfg.secretGroup === "number" && Number.isInteger(cfg.secretGroup) && cfg.secretGroup > 0 || typeof cfg.secretGroup === "string" && cfg.secretGroup.length > 0)) {
+    throw new Error(`Custom pattern ${label}: "secretGroup" must be a positive integer or a group name`);
+  }
   return {
     id: cfg.id,
     name: cfg.name,
@@ -1108,7 +1262,8 @@ function resolveCustomPattern(cfg) {
     severity: cfg.severity ?? "high",
     regex: parseRegexString(cfg.regex),
     placeholder: cfg.placeholder,
-    description: cfg.description ?? cfg.name
+    description: cfg.description ?? cfg.name,
+    ...cfg.secretGroup !== void 0 ? { secretGroup: cfg.secretGroup } : {}
   };
 }
 function loadConfig(explicitPath, searchDir = process.cwd()) {
@@ -1167,7 +1322,7 @@ var colors = {
 };
 function printHelp() {
   const helpText = `
-${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.3${colors.reset}
+${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.4${colors.reset}
 ${colors.dim}Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents${colors.reset}
 
 ${colors.bold}USAGE:${colors.reset}
@@ -1225,8 +1380,41 @@ async function main() {
     process.exit(0);
   }
   if (args.includes("-v") || args.includes("--version")) {
-    console.log("agent-redact v0.1.3");
+    console.log("agent-redact v0.1.4");
     process.exit(0);
+  }
+  const VALUE_FLAGS = /* @__PURE__ */ new Set(["-o", "--output", "--vault-out", "--unmask", "--config"]);
+  const BOOLEAN_FLAGS = /* @__PURE__ */ new Set([
+    "-r",
+    "--reversible",
+    "-j",
+    "--json",
+    "--stats",
+    "-i",
+    "--inplace",
+    "--entropy",
+    "--check",
+    "--fail-on-leak",
+    "-h",
+    "--help",
+    "-v",
+    "--version"
+  ]);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("-")) {
+      if (VALUE_FLAGS.has(arg)) {
+        const val = args[i + 1];
+        if (!val || val.startsWith("-")) {
+          console.error(`${colors.red}Error:${colors.reset} Flag "${arg}" requires a file argument.`);
+          process.exit(2);
+        }
+        i++;
+      } else if (!BOOLEAN_FLAGS.has(arg)) {
+        console.error(`${colors.red}Error:${colors.reset} Unknown flag "${arg}". Use --help for available options.`);
+        process.exit(2);
+      }
+    }
   }
   const isReversible = args.includes("-r") || args.includes("--reversible");
   const isJson = args.includes("-j") || args.includes("--json");
@@ -1260,40 +1448,58 @@ async function main() {
   );
   const effectiveReversible = isReversible || (loadedConfig?.reversible ?? false);
   const vault = effectiveReversible ? new Vault() : void 0;
+  if (effectiveReversible && isInplace && !vaultOutFile && !unmaskVaultFile) {
+    console.error(
+      `${colors.red}Error:${colors.reset} reversible in-place masking requires --vault-out <file>; otherwise the original values cannot be restored.`
+    );
+    process.exit(2);
+  }
   if (fileArgs.length > 1) {
+    if (unmaskVaultFile || outputFile || isJson) {
+      console.error(
+        `${colors.red}Error:${colors.reset} Flags -o/--output, --unmask, and -j/--json cannot be used with multiple input files.`
+      );
+      process.exit(2);
+    }
     let totalLeaksAcrossFiles = 0;
+    const inputs = [];
     for (const file of fileArgs) {
       try {
-        const fileContent = fs.readFileSync(file, "utf-8");
-        const res = redact(fileContent, {
-          reversible: effectiveReversible,
-          vault,
-          include: loadedConfig?.include,
-          exclude: loadedConfig?.exclude,
-          allowlist: loadedConfig?.allowlist,
-          customPatterns: loadedConfig?.customPatterns,
-          detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
-          entropy: loadedConfig?.entropy
-        });
-        if (isInplace) {
-          fs.writeFileSync(file, res.text, "utf-8");
-        }
-        if (res.hasLeaks) {
-          totalLeaksAcrossFiles += res.totalLeaks;
-          console.error(
-            `${colors.yellow}\u2716 [LEAK]${colors.reset} ${file}: ${res.totalLeaks} secret(s) detected`
-          );
-        } else {
-          console.error(`${colors.green}\u2714 [CLEAN]${colors.reset} ${file}`);
-        }
+        inputs.push({ file, content: fs.readFileSync(file, "utf-8") });
       } catch {
         console.error(`${colors.red}Error:${colors.reset} Cannot read file: ${file}`);
         process.exit(1);
       }
     }
+    const results = inputs.map(({ file, content: fileContent }) => ({
+      file,
+      res: redact(fileContent, {
+        reversible: effectiveReversible,
+        vault,
+        include: loadedConfig?.include,
+        exclude: loadedConfig?.exclude,
+        allowlist: loadedConfig?.allowlist,
+        customPatterns: loadedConfig?.customPatterns,
+        detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+        entropy: loadedConfig?.entropy
+      })
+    }));
     if (vaultOutFile && vault) {
       writeSecureFile(vaultOutFile, vault.toJSON());
       console.error(`${colors.green}\u2714${colors.reset} Session vault saved to ${vaultOutFile}`);
+    }
+    for (const { file, res } of results) {
+      if (isInplace && res.hasLeaks) {
+        fs.writeFileSync(file, res.text, "utf-8");
+      }
+      if (res.hasLeaks) {
+        totalLeaksAcrossFiles += res.totalLeaks;
+        console.error(
+          `${colors.yellow}\u2716 [LEAK]${colors.reset} ${file}: ${res.totalLeaks} secret(s) detected`
+        );
+      } else {
+        console.error(`${colors.green}\u2714 [CLEAN]${colors.reset} ${file}`);
+      }
     }
     if (totalLeaksAcrossFiles > 0 && (failOnLeak || !isInplace)) {
       console.error(

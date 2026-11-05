@@ -29,7 +29,7 @@ const colors = {
 
 function printHelp(): void {
   const helpText = `
-${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.3${colors.reset}
+${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.4${colors.reset}
 ${colors.dim}Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents${colors.reset}
 
 ${colors.bold}USAGE:${colors.reset}
@@ -92,8 +92,44 @@ async function main(): Promise<void> {
   }
 
   if (args.includes('-v') || args.includes('--version')) {
-    console.log('agent-redact v0.1.3');
+    console.log('agent-redact v0.1.4');
     process.exit(0);
+  }
+
+  const VALUE_FLAGS = new Set(['-o', '--output', '--vault-out', '--unmask', '--config']);
+  const BOOLEAN_FLAGS = new Set([
+    '-r',
+    '--reversible',
+    '-j',
+    '--json',
+    '--stats',
+    '-i',
+    '--inplace',
+    '--entropy',
+    '--check',
+    '--fail-on-leak',
+    '-h',
+    '--help',
+    '-v',
+    '--version'
+  ]);
+
+  // Validate flags and option values
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg.startsWith('-')) {
+      if (VALUE_FLAGS.has(arg)) {
+        const val = args[i + 1];
+        if (!val || val.startsWith('-')) {
+          console.error(`${colors.red}Error:${colors.reset} Flag "${arg}" requires a file argument.`);
+          process.exit(2);
+        }
+        i++; // skip value argument
+      } else if (!BOOLEAN_FLAGS.has(arg)) {
+        console.error(`${colors.red}Error:${colors.reset} Unknown flag "${arg}". Use --help for available options.`);
+        process.exit(2);
+      }
+    }
   }
 
   // Parse flag options
@@ -141,45 +177,71 @@ async function main(): Promise<void> {
   const effectiveReversible = isReversible || (loadedConfig?.reversible ?? false);
   const vault = effectiveReversible ? new Vault() : undefined;
 
+  // Reversible placeholders written in-place without a saved vault can never be restored:
+  // the original secrets would be destroyed. Refuse instead of silently losing data.
+  if (effectiveReversible && isInplace && !vaultOutFile && !unmaskVaultFile) {
+    console.error(
+      `${colors.red}Error:${colors.reset} reversible in-place masking requires --vault-out <file>; ` +
+        'otherwise the original values cannot be restored.'
+    );
+    process.exit(2);
+  }
+
   // Multi-file screening mode (used by pre-commit or batch audits)
   if (fileArgs.length > 1) {
+    if (unmaskVaultFile || outputFile || isJson) {
+      console.error(
+        `${colors.red}Error:${colors.reset} Flags -o/--output, --unmask, and -j/--json cannot be used with multiple input files.`
+      );
+      process.exit(2);
+    }
+
     let totalLeaksAcrossFiles = 0;
 
+    // Read every input first so a missing/unreadable file aborts before anything is modified
+    const inputs: Array<{ file: string; content: string }> = [];
     for (const file of fileArgs) {
       try {
-        const fileContent = readFileSync(file, 'utf-8');
-        const res = redact(fileContent, {
-          reversible: effectiveReversible,
-          vault,
-          include: loadedConfig?.include,
-          exclude: loadedConfig?.exclude,
-          allowlist: loadedConfig?.allowlist,
-          customPatterns: loadedConfig?.customPatterns,
-          detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
-          entropy: loadedConfig?.entropy
-        });
-
-        if (isInplace) {
-          writeFileSync(file, res.text, 'utf-8');
-        }
-
-        if (res.hasLeaks) {
-          totalLeaksAcrossFiles += res.totalLeaks;
-          console.error(
-            `${colors.yellow}✖ [LEAK]${colors.reset} ${file}: ${res.totalLeaks} secret(s) detected`
-          );
-        } else {
-          console.error(`${colors.green}✔ [CLEAN]${colors.reset} ${file}`);
-        }
+        inputs.push({ file, content: readFileSync(file, 'utf-8') });
       } catch {
         console.error(`${colors.red}Error:${colors.reset} Cannot read file: ${file}`);
         process.exit(1);
       }
     }
 
+    const results = inputs.map(({ file, content: fileContent }) => ({
+      file,
+      res: redact(fileContent, {
+        reversible: effectiveReversible,
+        vault,
+        include: loadedConfig?.include,
+        exclude: loadedConfig?.exclude,
+        allowlist: loadedConfig?.allowlist,
+        customPatterns: loadedConfig?.customPatterns,
+        detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+        entropy: loadedConfig?.entropy
+      })
+    }));
+
+    // Persist the vault BEFORE rewriting inputs, so placeholders are always recoverable
     if (vaultOutFile && vault) {
       writeSecureFile(vaultOutFile, vault.toJSON());
       console.error(`${colors.green}✔${colors.reset} Session vault saved to ${vaultOutFile}`);
+    }
+
+    for (const { file, res } of results) {
+      if (isInplace && res.hasLeaks) {
+        writeFileSync(file, res.text, 'utf-8');
+      }
+
+      if (res.hasLeaks) {
+        totalLeaksAcrossFiles += res.totalLeaks;
+        console.error(
+          `${colors.yellow}✖ [LEAK]${colors.reset} ${file}: ${res.totalLeaks} secret(s) detected`
+        );
+      } else {
+        console.error(`${colors.green}✔ [CLEAN]${colors.reset} ${file}`);
+      }
     }
 
     if (totalLeaksAcrossFiles > 0 && (failOnLeak || !isInplace)) {
