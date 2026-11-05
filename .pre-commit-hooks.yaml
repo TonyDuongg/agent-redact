@@ -1,7 +1,9 @@
 - id: agent-redact
   name: agent-redact secret scanner
   description: Zero-latency secret & PII redactor to prevent leaking tokens in git commits
-  entry: npx agent-redact --check
+  # pre-commit installs this package into an isolated node env, so the bin is already on PATH.
+  # Calling it directly avoids `npx` silently downloading a different version from the registry.
+  entry: agent-redact --check
   language: node
   types: [text]
   stages: [pre-commit]

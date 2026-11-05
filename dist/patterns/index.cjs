@@ -96,7 +96,7 @@ var databaseUrlPattern = {
   name: "Database Connection URL",
   category: "credential",
   severity: "critical",
-  regex: /\b(?:postgres|postgresql|mysql|mariadb|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:]*:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+  regex: /\b(?:postgres|postgresql|mysql|mariadb|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:/@]*:[^\s/@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
   placeholder: "DATABASE_URL",
   description: "Database connection URL containing user and password credentials"
 };
@@ -106,7 +106,7 @@ var basicAuthUrlPattern = {
   name: "HTTP Basic Auth URL",
   category: "credential",
   severity: "critical",
-  regex: /\bhttps?:\/\/[^\s:]+:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+  regex: /\bhttps?:\/\/[^\s:/@]+:[^\s/@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
   placeholder: "BASIC_AUTH_URL",
   description: "HTTP/HTTPS URL containing username and password credentials"
 };
@@ -256,16 +256,26 @@ var ipv6Pattern = {
   severity: "low",
   regex: /(?<![a-zA-Z0-9_:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|::[1])(?![a-zA-Z0-9_:])/gi,
   placeholder: "IPV6_ADDRESS",
-  description: "Standard or compressed 128-bit IPv6 address"
+  description: "Standard or compressed 128-bit IPv6 address",
+  validator: isLikelyIpv6
 };
+var IPV6_LOOPBACK = ["", "", "1"].join(":");
+function isLikelyIpv6(candidate) {
+  if (candidate === IPV6_LOOPBACK) return true;
+  const groups = candidate.split(":").filter((g) => g.length > 0);
+  if (groups.length < 2) return false;
+  if (!/[0-9]/.test(candidate)) return false;
+  if (groups.length === 2 && candidate.includes("::") && groups[0].length < 3) return false;
+  return true;
+}
 var phonePattern = {
   id: "phone-number",
   name: "Phone Number",
   category: "pii",
   severity: "medium",
-  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b)/g,
+  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b)/g,
   placeholder: "PHONE_NUMBER",
-  description: "Telephone number in formatted local or international E.164 format"
+  description: "Telephone number in formatted local, international E.164, or domestic VN format"
 };
 var PII_PATTERNS = [
   emailPattern,

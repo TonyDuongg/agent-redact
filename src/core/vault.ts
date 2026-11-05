@@ -95,7 +95,10 @@ export class Vault {
   public restoreEntry(entry: VaultEntry): void {
     this.placeholderToEntry.set(entry.placeholder, entry);
     const existingList = this.placeholderToEntries.get(entry.placeholder) ?? [];
-    existingList.push(entry);
+    // Restoring the same (placeholder, original) pair twice must be idempotent
+    if (!existingList.some((e) => e.original === entry.original)) {
+      existingList.push(entry);
+    }
     this.placeholderToEntries.set(entry.placeholder, existingList);
     this.originalToPlaceholder.set(entry.original, entry.placeholder);
 
@@ -154,7 +157,7 @@ export class Vault {
    * Number of unique secrets stored.
    */
   public get size(): number {
-    return this.placeholderToEntries.size;
+    return this.originalToPlaceholder.size;
   }
 
   /**

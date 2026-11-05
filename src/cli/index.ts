@@ -1,8 +1,17 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
 import { loadConfig } from '../core/config.js';
+
+function writeSecureFile(filePath: string, content: string): void {
+  writeFileSync(filePath, content, { encoding: 'utf-8', mode: 0o600 });
+  try {
+    chmodSync(filePath, 0o600);
+  } catch {
+    // chmod may be a no-op on non-POSIX / Windows
+  }
+}
 
 // Minimal zero-dependency ANSI color helpers
 const colors = {
@@ -20,7 +29,7 @@ const colors = {
 
 function printHelp(): void {
   const helpText = `
-${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.2${colors.reset}
+${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.3${colors.reset}
 ${colors.dim}Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents${colors.reset}
 
 ${colors.bold}USAGE:${colors.reset}
@@ -83,7 +92,7 @@ async function main(): Promise<void> {
   }
 
   if (args.includes('-v') || args.includes('--version')) {
-    console.log('agent-redact v0.1.2');
+    console.log('agent-redact v0.1.3');
     process.exit(0);
   }
 
@@ -169,18 +178,18 @@ async function main(): Promise<void> {
     }
 
     if (vaultOutFile && vault) {
-      writeFileSync(vaultOutFile, vault.toJSON(), { encoding: 'utf-8', mode: 0o600 });
+      writeSecureFile(vaultOutFile, vault.toJSON());
       console.error(`${colors.green}✔${colors.reset} Session vault saved to ${vaultOutFile}`);
     }
 
-    if (totalLeaksAcrossFiles > 0) {
+    if (totalLeaksAcrossFiles > 0 && (failOnLeak || !isInplace)) {
       console.error(
         `\n${colors.red}[agent-redact] Audit failed: detected ${totalLeaksAcrossFiles} secret(s) across ${fileArgs.length} files.${colors.reset}`
       );
       process.exit(1);
     } else {
       console.error(
-        `\n${colors.green}[agent-redact] All ${fileArgs.length} files are clean.${colors.reset}`
+        `\n${colors.green}[agent-redact] All ${fileArgs.length} files ${isInplace ? 'sanitized' : 'are clean'}.${colors.reset}`
       );
       process.exit(0);
     }
@@ -241,7 +250,7 @@ async function main(): Promise<void> {
 
   // Save vault file if requested
   if (vaultOutFile && vault) {
-    writeFileSync(vaultOutFile, vault.toJSON(), { encoding: 'utf-8', mode: 0o600 });
+    writeSecureFile(vaultOutFile, vault.toJSON());
     console.error(`${colors.green}✔${colors.reset} Session vault saved to ${vaultOutFile}`);
   }
 
@@ -255,7 +264,7 @@ async function main(): Promise<void> {
     } else if (isInplace && fileArg) {
       writeFileSync(fileArg, result.text, 'utf-8');
       console.error(`${colors.green}✔${colors.reset} Sanitized in-place: ${fileArg}`);
-    } else {
+    } else if (!failOnLeak) {
       process.stdout.write(result.text);
     }
 

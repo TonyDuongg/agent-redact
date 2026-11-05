@@ -12,15 +12,20 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      # A step's own `env:` is not visible to that step's `if:`, so the previous
+      # `if: env.NODE_AUTH_TOKEN != ''` was always false and publishing was silently skipped.
+      # Expose only a boolean at job level; the token itself stays scoped to the publish step.
+      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Set up Node.js 20.x
-        uses: actions/setup-node@v4
+      - name: Set up Node.js 22.x
+        uses: actions/setup-node@v5
         with:
-          node-version: 20.x
+          node-version: 22.x
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
@@ -34,9 +39,22 @@ jobs:
       - name: Build package
         run: npm run build
 
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
       - name: Publish to npm
-        if: env.NODE_AUTH_TOKEN != ''
+        if: env.HAS_NPM_TOKEN == 'true'
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Fail when npm token is missing
+        if: env.HAS_NPM_TOKEN != 'true'
+        run: |
+          echo "::error::NPM_TOKEN repository secret is not configured, so the package was NOT published."
+          exit 1

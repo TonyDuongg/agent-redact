@@ -58,11 +58,21 @@ export class RedactTransformStream extends Transform {
       pemEndMatch = this.buffer.match(PEM_END_PATTERN);
     }
 
-    // If buffer contains an incomplete private key PEM block, hold it until completed (up to 64KB)
+    // If buffer contains an incomplete private key PEM block, hold it until completed (up to 1MB)
     const lastBegin = this.buffer.search(PEM_BEGIN_PATTERN);
     if (lastBegin !== -1) {
       const remaining = this.buffer.slice(lastBegin);
-      if (!PEM_END_PATTERN.test(remaining) && this.buffer.length < 65536) {
+      if (!PEM_END_PATTERN.test(remaining)) {
+        if (this.buffer.length < 1048576) {
+          callback();
+          return;
+        }
+        // If an open PEM block exceeds 1MB without an END marker, redact the open block
+        // so private key body lines are never leaked unredacted line by line
+        const before = this.buffer.slice(0, lastBegin);
+        const prefixRes = redact(before, { ...this.options, vault: this.vault });
+        this.push(prefixRes.text + '[REDACTED_PRIVATE_KEY]\n');
+        this.buffer = '';
         callback();
         return;
       }
@@ -89,11 +99,19 @@ export class RedactTransformStream extends Transform {
   override _flush(callback: TransformCallback): void {
     this.buffer += this.decoder.end();
     if (this.buffer.length > 0) {
-      const res = redact(this.buffer, {
-        ...this.options,
-        vault: this.vault
-      });
-      this.push(res.text);
+      // Check for unclosed private key block at end of stream
+      const lastBegin = this.buffer.search(PEM_BEGIN_PATTERN);
+      if (lastBegin !== -1 && !PEM_END_PATTERN.test(this.buffer.slice(lastBegin))) {
+        const before = this.buffer.slice(0, lastBegin);
+        const prefixRes = redact(before, { ...this.options, vault: this.vault });
+        this.push(prefixRes.text + '[REDACTED_PRIVATE_KEY]');
+      } else {
+        const res = redact(this.buffer, {
+          ...this.options,
+          vault: this.vault
+        });
+        this.push(res.text);
+      }
       this.buffer = '';
     }
     callback();

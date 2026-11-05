@@ -322,6 +322,9 @@ Add to `cline_mcp_settings.json`:
 | `clear_vault` | Wipes in-memory vault when session concludes |
 | `list_supported_patterns` | Queries all active secret definitions and threat levels |
 
+> [!WARNING]
+> **MCP Context Isolation**: Files written by `unmask_text` contain plaintext secrets directly on disk. Ensure your agent prompts or tool permissions prohibit reading restored files back into the model context.
+
 ---
 
 ### 8. Multi-Language & Python Agents (LangChain, AutoGen, CrewAI)
@@ -329,12 +332,13 @@ Add to `cline_mcp_settings.json`:
 For Python, Go, Rust, or any non-Node environment, `agent-redact` integrates seamlessly via CLI subprocess or stdin pipes:
 
 ```python
+import os
 import subprocess
 import sys
 
 def sanitize_prompt_for_agent(raw_prompt: str) -> str:
     """Pipes sensitive prompts through agent-redact before sending to any LLM."""
-    cmd = ["npx.cmd" if sys.platform == "win32" else "npx", "-y", "agent-redact", "-r"]
+    cmd = ["npx.cmd" if sys.platform == "win32" else "npx", "-y", "agent-redact"]
     proc = subprocess.run(
         cmd,
         input=raw_prompt,
@@ -347,10 +351,16 @@ def sanitize_prompt_for_agent(raw_prompt: str) -> str:
     return proc.stdout
 
 # Safe to send to LangChain, AutoGen, or CrewAI:
-clean_prompt = sanitize_prompt_for_agent("My API key is sk-ant-api03-xxx and DB is postgres://...")
+clean_prompt = sanitize_prompt_for_agent(
+    f"My API key is {os.environ['ANTHROPIC_API_KEY']} and DB is {os.environ['DATABASE_URL']}"
+)
 print(clean_prompt)
-# => "My API key is [ANTHROPIC_API_KEY_1] and DB is [DATABASE_URL_1]"
+# => "My API key is [REDACTED_ANTHROPIC_API_KEY] and DB is [REDACTED_DATABASE_URL]"
 ```
+
+> Need to restore the values afterwards? Use reversible mode with a vault file:
+> `agent-redact -r --vault-out session.vault.json`, then `agent-redact --unmask session.vault.json`.
+> Without `--vault-out` the placeholders cannot be restored.
 
 ---
 
@@ -379,7 +389,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Scan repository for secrets
         uses: TonyDuongg/agent-redact@main
         with:
@@ -404,7 +414,7 @@ Prevent accidental credential commits locally using [pre-commit](https://pre-com
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/TonyDuongg/agent-redact
-    rev: v0.1.2
+    rev: v0.1.3
     hooks:
       - id: agent-redact
 ```
@@ -482,7 +492,7 @@ npm run bench
   * Official GitHub Action (`action.yml`) with in-PR file & line annotations.
   * Markdown Step Summary table in GitHub Actions runner.
   * `.pre-commit-hooks.yaml` for pre-commit git hooks.
-* [x] **v1.6 (NPM Public Distribution & Multi-OS CI)**:
+* [ ] **v1.6 (NPM Public Distribution & Multi-OS CI)**:
   * Official public publishing to npm registry (`npm install agent-redact`).
   * Cross-platform support (Ubuntu, Windows, macOS) across Node.js 20, 22, and 24.
   * GitHub Release with automated verification and security audit conformance.

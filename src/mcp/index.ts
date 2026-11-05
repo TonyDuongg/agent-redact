@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { runMcpServer, createMcpServer } from './server.js';
 
 export { runMcpServer, createMcpServer };
+export type { McpServerOptions } from './server.js';
 
 // Determine if this file is executed directly (via CLI / npx) vs imported as a library module
 const isMain =
