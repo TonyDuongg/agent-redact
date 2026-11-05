@@ -1,5 +1,12 @@
 import type { RedactPattern } from '../core/types.js';
 
+/*
+ * Token alphabets that include '-' end with `(?![A-Za-z0-9_])` instead of `\b`.
+ * `\b` cannot match between a final '-' and a following space or punctuation, so a
+ * token whose last character is '-' (about 1 in 64 for base64url) was skipped entirely
+ * by fixed-length patterns. The lookahead is identical to `\b` for every other ending.
+ */
+
 /**
  * Anthropic Claude API Key (standard API key or Admin API key)
  * e.g. sk-ant-api03-... or sk-ant-admin01-...
@@ -9,7 +16,7 @@ export const anthropicApiKeyPattern: RedactPattern = {
   name: 'Anthropic API Key',
   category: 'credential',
   severity: 'critical',
-  regex: /\bsk-ant-(?:api03|admin01)-[A-Za-z0-9_\-]{80,120}\b|\bsk-ant-[A-Za-z0-9_\-]{20,}\b/g,
+  regex: /\bsk-ant-(?:api03|admin01)-[A-Za-z0-9_\-]{80,120}(?![A-Za-z0-9_])|\bsk-ant-[A-Za-z0-9_\-]{20,}(?![A-Za-z0-9_])/g,
   placeholder: 'ANTHROPIC_API_KEY',
   description: 'Anthropic Claude API key or Admin key'
 };
@@ -22,7 +29,7 @@ export const openaiApiKeyPattern: RedactPattern = {
   name: 'OpenAI API Key',
   category: 'credential',
   severity: 'critical',
-  regex: /\bsk-(?:proj|svcacct)-[A-Za-z0-9_\-]{40,}\b|\bsk-[a-zA-Z0-9]{20,}\b/g,
+  regex: /\bsk-(?:proj|svcacct)-[A-Za-z0-9_\-]{40,}(?![A-Za-z0-9_])|\bsk-[a-zA-Z0-9]{20,}\b/g,
   placeholder: 'OPENAI_API_KEY',
   description: 'OpenAI API key (standard, project, or service account)'
 };
@@ -90,7 +97,7 @@ export const jwtTokenPattern: RedactPattern = {
   name: 'JSON Web Token (JWT)',
   category: 'credential',
   severity: 'critical',
-  regex: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_\-]{10,}\b/g,
+  regex: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_\-]{10,}(?![A-Za-z0-9_])/g,
   placeholder: 'JWT_TOKEN',
   description: 'JSON Web Token (JWT) in header.payload.signature format'
 };
@@ -116,7 +123,7 @@ export const googleApiKeyPattern: RedactPattern = {
   name: 'Google API Key',
   category: 'credential',
   severity: 'high',
-  regex: /\bAIza[0-9A-Za-z\-_]{35}\b/g,
+  regex: /\bAIza[0-9A-Za-z\-_]{35}(?![A-Za-z0-9_])/g,
   placeholder: 'GOOGLE_API_KEY',
   description: 'Google Cloud or Gemini AI Studio API key'
 };
@@ -187,7 +194,7 @@ export const gitlabTokenPattern: RedactPattern = {
   name: 'GitLab Token',
   category: 'credential',
   severity: 'high',
-  regex: /\bglpat-[0-9a-zA-Z\-_]{20,}\b/g,
+  regex: /\bglpat-[0-9a-zA-Z\-_]{20,}(?![A-Za-z0-9_])/g,
   placeholder: 'GITLAB_TOKEN',
   description: 'GitLab Personal Access Token'
 };
@@ -200,7 +207,7 @@ export const discordTokenPattern: RedactPattern = {
   name: 'Discord Bot Token',
   category: 'credential',
   severity: 'high',
-  regex: /\b[MNO][a-zA-Z0-9_-]{23,25}\.[a-zA-Z0-9_-]{6}\.[a-zA-Z0-9_-]{27,38}\b/g,
+  regex: /\b[MNO][a-zA-Z0-9_-]{23,25}\.[a-zA-Z0-9_-]{6}\.[a-zA-Z0-9_-]{27,38}(?![A-Za-z0-9_])/g,
   placeholder: 'DISCORD_TOKEN',
   description: 'Discord Bot Authentication Token'
 };
@@ -226,7 +233,7 @@ export const sendgridApiKeyPattern: RedactPattern = {
   name: 'SendGrid API Key',
   category: 'credential',
   severity: 'high',
-  regex: /\bSG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}\b/g,
+  regex: /\bSG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}(?![A-Za-z0-9_])/g,
   placeholder: 'SENDGRID_API_KEY',
   description: 'SendGrid Email API key'
 };
@@ -265,7 +272,7 @@ export const telegramBotTokenPattern: RedactPattern = {
   name: 'Telegram Bot Token',
   category: 'credential',
   severity: 'critical',
-  regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
+  regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_])/g,
   placeholder: 'TELEGRAM_BOT_TOKEN',
   description: 'Telegram Bot API authentication token'
 };
@@ -304,7 +311,7 @@ export const gcpOauthSecretPattern: RedactPattern = {
   name: 'GCP OAuth Client Secret',
   category: 'credential',
   severity: 'critical',
-  regex: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/g,
+  regex: /\bGOCSPX-[A-Za-z0-9_-]{28}(?![A-Za-z0-9_])/g,
   placeholder: 'GCP_OAUTH_CLIENT_SECRET',
   description: 'Google Cloud Platform OAuth 2.0 client secret'
 };

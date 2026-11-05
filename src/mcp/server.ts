@@ -25,6 +25,8 @@ export interface McpServerOptions {
    * Defaults to the process cwd, the OS temp dir and AGENT_REDACT_ALLOWED_DIR (if set).
    */
   allowedRoots?: string[];
+  /** Maximum number of distinct secrets kept in the session vault (default 10,000) */
+  vaultMaxEntries?: number;
 }
 
 /**
@@ -143,7 +145,8 @@ function securityError(field: string, value: string, reason: string) {
 }
 
 export function createMcpServer(options: McpServerOptions = {}): McpServer {
-  const sessionVault = new Vault({ maxEntries: 10_000 });
+  const vaultMaxEntries = options.vaultMaxEntries ?? 10_000;
+  const sessionVault = new Vault({ maxEntries: vaultMaxEntries });
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
 
   const server = new McpServer({
@@ -228,11 +231,17 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
       try {
         const restored = unmask(text, sessionVault);
         safeWriteFile(outCheck.realPath, restored, 0o600);
+        // Placeholder names are not secret; report them so a capped vault never fails silently
+        const evicted = sessionVault.findEvictedPlaceholders(restored);
+        const evictionNote =
+          evicted.length > 0
+            ? ` WARNING: ${evicted.length} placeholder(s) could not be restored because they were evicted from the session vault (limit ${vaultMaxEntries} entries): ${evicted.join(', ')}. Re-run redact_text on the original source to regenerate them.`
+            : '';
         return {
           content: [
             {
               type: 'text',
-              text: `Successfully restored content to ${outputFilePath}. Plaintext secrets were safely written to disk and remain isolated from model context.`
+              text: `Successfully restored content to ${outputFilePath}. Plaintext secrets were safely written to disk and remain isolated from model context.${evictionNote}`
             }
           ]
         };

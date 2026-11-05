@@ -21,7 +21,9 @@ export const ipv4Pattern: RedactPattern = {
   name: 'IPv4 Address',
   category: 'network',
   severity: 'low',
-  regex: /(?<![vV])\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
+  // Skip four-part version numbers introduced by v / ver / version (see tests/audit-round5).
+  // `\b` before the keyword keeps words that merely end in "ver" (e.g. server=) matching.
+  regex: /(?<!\b(?:[vV](?:er(?:sion)?)?|VER(?:SION)?)[\s:=]{0,2})\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
   placeholder: 'IPV4_ADDRESS',
   description: 'Standard IPv4 network address'
 };
