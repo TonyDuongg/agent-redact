@@ -177,6 +177,60 @@ var supabaseKeyPattern = {
   placeholder: "SUPABASE_KEY",
   description: "Supabase Project or Management API key"
 };
+var telegramBotTokenPattern = {
+  id: "telegram-bot-token",
+  name: "Telegram Bot Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
+  placeholder: "TELEGRAM_BOT_TOKEN",
+  description: "Telegram Bot API authentication token"
+};
+var twilioApiKeyPattern = {
+  id: "twilio-api-key",
+  name: "Twilio API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bSK[0-9a-fA-F]{32}\b/g,
+  placeholder: "TWILIO_API_KEY",
+  description: "Twilio API Key starting with SK prefix"
+};
+var azureStorageKeyPattern = {
+  id: "azure-storage-key",
+  name: "Azure Storage Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bAccountKey=[A-Za-z0-9+/]{86}==|\bAccountKey=[A-Za-z0-9+/=]{88}\b/g,
+  placeholder: "AZURE_STORAGE_KEY",
+  description: "Azure Storage Account access key"
+};
+var gcpOauthSecretPattern = {
+  id: "gcp-oauth-client-secret",
+  name: "GCP OAuth Client Secret",
+  category: "credential",
+  severity: "critical",
+  regex: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/g,
+  placeholder: "GCP_OAUTH_CLIENT_SECRET",
+  description: "Google Cloud Platform OAuth 2.0 client secret"
+};
+var digitalOceanTokenPattern = {
+  id: "digitalocean-token",
+  name: "DigitalOcean Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\bdop_v1_[a-f0-9]{64}\b/g,
+  placeholder: "DIGITALOCEAN_TOKEN",
+  description: "DigitalOcean Personal Access Token"
+};
+var mailgunApiKeyPattern = {
+  id: "mailgun-api-key",
+  name: "Mailgun API Key",
+  category: "credential",
+  severity: "high",
+  regex: /\bkey-[0-9a-zA-Z]{32}\b/g,
+  placeholder: "MAILGUN_API_KEY",
+  description: "Mailgun API authentication key"
+};
 var CREDENTIAL_PATTERNS = [
   anthropicApiKeyPattern,
   openaiApiKeyPattern,
@@ -196,7 +250,13 @@ var CREDENTIAL_PATTERNS = [
   npmTokenPattern,
   sendgridApiKeyPattern,
   twilioAccountSidPattern,
-  supabaseKeyPattern
+  supabaseKeyPattern,
+  telegramBotTokenPattern,
+  twilioApiKeyPattern,
+  azureStorageKeyPattern,
+  gcpOauthSecretPattern,
+  digitalOceanTokenPattern,
+  mailgunApiKeyPattern
 ];
 
 // src/patterns/pii.ts
@@ -214,7 +274,7 @@ var ipv4Pattern = {
   name: "IPv4 Address",
   category: "network",
   severity: "low",
-  regex: /\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
+  regex: /(?<![vV])\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
   placeholder: "IPV4_ADDRESS",
   description: "Standard IPv4 network address"
 };
@@ -248,7 +308,7 @@ var creditCardPattern = {
   name: "Credit Card Number",
   category: "pii",
   severity: "critical",
-  regex: /\b(?:4[0-9]{3}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{1,4}|5[1-5][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|2[2-7][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|3[47][0-9]{2}[-\s]?[0-9]{6}[-\s]?[0-9]{5}|6(?:011|5[0-9]{2})[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4})\b/g,
+  regex: /\b(?:4[0-9]{3}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{1,4}|5[1-5][0-9]{2}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}|2[2-7][0-9]{2}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}|3[47][0-9]{2}[- ]?[0-9]{6}[- ]?[0-9]{5}|6(?:011|5[0-9]{2})[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4})\b/g,
   placeholder: "CREDIT_CARD",
   description: "Major credit card numbers (Visa, MasterCard, Amex, Discover)",
   validator: isValidLuhn
@@ -277,7 +337,7 @@ var phonePattern = {
   name: "Phone Number",
   category: "pii",
   severity: "medium",
-  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b)/g,
+  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b|(?<![\w$])\b02(?:[48][-.\s]?[0-9]{4}[-.\s]?[0-9]{4}|[0-35-79][0-9][-.\s]?[0-9]{3}[-.\s]?[0-9]{3,4})\b)/g,
   placeholder: "PHONE_NUMBER",
   description: "Telephone number in formatted local, international E.164, or domestic VN format"
 };
@@ -308,12 +368,15 @@ exports.PII_PATTERNS = PII_PATTERNS;
 exports.anthropicApiKeyPattern = anthropicApiKeyPattern;
 exports.awsAccessKeyPattern = awsAccessKeyPattern;
 exports.awsSecretKeyPattern = awsSecretKeyPattern;
+exports.azureStorageKeyPattern = azureStorageKeyPattern;
 exports.basicAuthUrlPattern = basicAuthUrlPattern;
 exports.creditCardPattern = creditCardPattern;
 exports.databaseUriPattern = databaseUriPattern;
 exports.databaseUrlPattern = databaseUrlPattern;
+exports.digitalOceanTokenPattern = digitalOceanTokenPattern;
 exports.discordTokenPattern = discordTokenPattern;
 exports.emailPattern = emailPattern;
+exports.gcpOauthSecretPattern = gcpOauthSecretPattern;
 exports.githubTokenPattern = githubTokenPattern;
 exports.gitlabTokenPattern = gitlabTokenPattern;
 exports.googleApiKeyPattern = googleApiKeyPattern;
@@ -321,6 +384,7 @@ exports.huggingFaceTokenPattern = huggingFaceTokenPattern;
 exports.ipv4Pattern = ipv4Pattern;
 exports.ipv6Pattern = ipv6Pattern;
 exports.jwtTokenPattern = jwtTokenPattern;
+exports.mailgunApiKeyPattern = mailgunApiKeyPattern;
 exports.npmTokenPattern = npmTokenPattern;
 exports.openaiApiKeyPattern = openaiApiKeyPattern;
 exports.phonePattern = phonePattern;
@@ -330,6 +394,8 @@ exports.slackTokenPattern = slackTokenPattern;
 exports.ssnPattern = ssnPattern;
 exports.stripeKeyPattern = stripeKeyPattern;
 exports.supabaseKeyPattern = supabaseKeyPattern;
+exports.telegramBotTokenPattern = telegramBotTokenPattern;
 exports.twilioAccountSidPattern = twilioAccountSidPattern;
+exports.twilioApiKeyPattern = twilioApiKeyPattern;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map

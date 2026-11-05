@@ -9,6 +9,25 @@ export class Vault {
   private placeholderToEntries = new Map<string, VaultEntry[]>();
   private originalToPlaceholder = new Map<string, string>();
   private counters = new Map<string, number>();
+  private maxEntries?: number;
+
+  constructor(options?: { maxEntries?: number }) {
+    this.maxEntries = options?.maxEntries;
+  }
+
+  private evictOldestIfNeeded(): void {
+    if (this.maxEntries && this.originalToPlaceholder.size >= this.maxEntries) {
+      const oldestPlaceholder = this.placeholderToEntry.keys().next().value;
+      if (oldestPlaceholder) {
+        const oldEntry = this.placeholderToEntry.get(oldestPlaceholder);
+        if (oldEntry) {
+          this.originalToPlaceholder.delete(oldEntry.original);
+        }
+        this.placeholderToEntry.delete(oldestPlaceholder);
+        this.placeholderToEntries.delete(oldestPlaceholder);
+      }
+    }
+  }
 
   /**
    * Retrieves an existing placeholder or allocates a new numbered placeholder
@@ -20,6 +39,8 @@ export class Vault {
     if (existing) {
       return existing;
     }
+
+    this.evictOldestIfNeeded();
 
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
@@ -93,6 +114,9 @@ export class Vault {
    * Directly restores an entry into the vault without altering placeholder names.
    */
   public restoreEntry(entry: VaultEntry): void {
+    if (!this.originalToPlaceholder.has(entry.original)) {
+      this.evictOldestIfNeeded();
+    }
     this.placeholderToEntry.set(entry.placeholder, entry);
     const existingList = this.placeholderToEntries.get(entry.placeholder) ?? [];
     // Restoring the same (placeholder, original) pair twice must be idempotent

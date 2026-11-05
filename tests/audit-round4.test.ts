@@ -262,6 +262,180 @@ describe('Audit round 4', () => {
       expect(annotation).not.toContain('a,b.env');
     });
   });
+
+  describe('New Provider Credentials & Pattern Accuracy', () => {
+    it('detects Telegram Bot tokens', () => {
+      const token = `1234567890:${pseudoRandom(35)}`;
+      expect(redact(`bot_token: ${token}`).text).toBe('bot_token: [REDACTED_TELEGRAM_BOT_TOKEN]');
+    });
+
+    it('detects Twilio API keys starting with SK', () => {
+      const key = `SK${pseudoRandom(32, '0123456789abcdef')}`;
+      expect(redact(`TWILIO_KEY=${key}`).text).toBe('TWILIO_KEY=[REDACTED_TWILIO_API_KEY]');
+    });
+
+    it('detects Azure Storage AccountKey', () => {
+      const key = `AccountKey=${pseudoRandom(86)}==`;
+      expect(redact(`connect: ${key}`).text).toBe('connect: [REDACTED_AZURE_STORAGE_KEY]');
+    });
+
+    it('detects GCP OAuth client secrets', () => {
+      const secret = `GOCSPX-${pseudoRandom(28)}`;
+      expect(redact(`client_secret = ${secret}`).text).toBe('client_secret = [REDACTED_GCP_OAUTH_CLIENT_SECRET]');
+    });
+
+    it('detects DigitalOcean personal access tokens', () => {
+      const token = `dop_v1_${pseudoRandom(64, '0123456789abcdef')}`;
+      expect(redact(`token: ${token}`).text).toBe('token: [REDACTED_DIGITALOCEAN_TOKEN]');
+    });
+
+    it('detects Mailgun API keys', () => {
+      const key = `key-${pseudoRandom(32)}`;
+      expect(redact(`mailgun_key: ${key}`).text).toBe('mailgun_key: [REDACTED_MAILGUN_API_KEY]');
+    });
+
+    it('detects Vietnamese landlines in Hanoi (024) and HCM (028)', () => {
+      expect(redact('Tong dai HN: 024 3825 1234, HCM: 028-3825-1234').text).toBe(
+        'Tong dai HN: [REDACTED_PHONE_NUMBER], HCM: [REDACTED_PHONE_NUMBER]'
+      );
+    });
+
+    it('does not redact table lines across newlines as credit card numbers', () => {
+      const table = '| ID | Qty | Amount |\n| 4111 | 1111 | 1111 |\n| 1111 | 2222 | 3333 |';
+      expect(redact(table).text).toBe(table);
+    });
+
+    it('does not redact version tags like v1.0.0.1 as IPv4 address', () => {
+      expect(redact('Release version v1.0.0.1 is available at 192.168.1.1').text).toBe(
+        'Release version v1.0.0.1 is available at [REDACTED_IPV4_ADDRESS]'
+      );
+    });
+  });
+
+  describe('Engine include filter', () => {
+    it('preserves custom patterns and entropy detector when include option is passed', () => {
+      const customP = resolveCustomPattern({
+        id: 'corp-token',
+        name: 'Corp Token',
+        regex: 'CORP-[A-Z0-9]{8}',
+        placeholder: 'CORP_TOKEN'
+      });
+      const cryptoSecret = 'd9F8qZ1_pLm4wK7aQx0vN2yB8rC3eH6j';
+      const input = `key=AKIAIOSFODNN7EXAMPLE corp=CORP-ABCD1234 api_key="${cryptoSecret}"`;
+      const res = redact(input, {
+        include: ['aws-access-key-id'],
+        customPatterns: [customP],
+        detectHighEntropy: true
+      });
+      expect(res.text).toContain('[REDACTED_AWS_ACCESS_KEY_ID]');
+      expect(res.text).toContain('[REDACTED_CORP_TOKEN]');
+      expect(res.text).toContain('[REDACTED_GENERIC_SECRET]');
+    });
+  });
+
+  describe('Vault maxEntries cap', () => {
+    it('evicts oldest entry when size exceeds maxEntries', () => {
+      const v = new Vault({ maxEntries: 2 });
+      const p = resolveCustomPattern({
+        id: 'k',
+        name: 'K',
+        regex: 'k',
+        placeholder: 'KEY'
+      });
+      v.getOrCreate('secret1', p);
+      v.getOrCreate('secret2', p);
+      expect(v.size).toBe(2);
+      expect(v.getOriginal('[KEY_1]')).toBe('secret1');
+
+      v.getOrCreate('secret3', p);
+      expect(v.size).toBe(2);
+      // oldest (secret1) evicted
+      expect(v.getOriginal('[KEY_1]')).toBeUndefined();
+      expect(v.getOriginal('[KEY_2]')).toBe('secret2');
+      expect(v.getOriginal('[KEY_3]')).toBe('secret3');
+    });
+  });
+
+  describe('MCP File Size and Binary Protection', () => {
+    it('refuses to scan files larger than 5 MB', async () => {
+      const dir = makeTmpDir('ar-mcp-size-');
+      const largeFile = join(dir, 'large.log');
+      // Create a sparse-ish file or buffer > 5MB
+      const bigBuf = Buffer.alloc(5 * 1024 * 1024 + 1024, 0x20); // 5MB + 1KB spaces
+      writeFileSync(largeFile, bigBuf);
+
+      const server = createMcpServer({ allowedRoots: [dir] });
+      const client = new Client({ name: 'test', version: '1.0' }, { capabilities: {} });
+      const [t1, t2] = InMemoryTransport.createLinkedPair();
+      await server.connect(t1);
+      await client.connect(t2);
+
+      const res = (await client.callTool({
+        name: 'scan_file',
+        arguments: { filePath: largeFile }
+      })) as { isError?: boolean; content: Array<{ text: string }> };
+
+      expect(res.isError).toBe(true);
+      expect(res.content[0]?.text).toMatch(/exceeds maximum allowed limit of 5 MB/);
+      await client.close();
+    });
+
+    it('refuses to scan binary files containing null bytes', async () => {
+      const dir = makeTmpDir('ar-mcp-bin-');
+      const binFile = join(dir, 'binary.dat');
+      const binBuf = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01, 0x01]);
+      writeFileSync(binFile, binBuf);
+
+      const server = createMcpServer({ allowedRoots: [dir] });
+      const client = new Client({ name: 'test', version: '1.0' }, { capabilities: {} });
+      const [t1, t2] = InMemoryTransport.createLinkedPair();
+      await server.connect(t1);
+      await client.connect(t2);
+
+      const res = (await client.callTool({
+        name: 'scan_file',
+        arguments: { filePath: binFile }
+      })) as { isError?: boolean; content: Array<{ text: string }> };
+
+      expect(res.isError).toBe(true);
+      expect(res.content[0]?.text).toContain('Cannot scan binary file');
+      await client.close();
+    });
+  });
+
+  describe('CLI Flag and Argument Validation', () => {
+    it('rejects unknown flags with exit code 2', async () => {
+      const dir = makeTmpDir('ar-cli-val-');
+      const res = await runCli(['--unknown-flag', 'test.txt'], dir);
+      expect(res.code).toBe(2);
+      expect(res.stderr).toContain('Unknown flag "--unknown-flag"');
+    });
+
+    it('rejects value flags without value with exit code 2', async () => {
+      const dir = makeTmpDir('ar-cli-val-');
+      const res = await runCli(['-o'], dir);
+      expect(res.code).toBe(2);
+      expect(res.stderr).toContain('requires a file argument');
+    });
+
+    it('rejects multi-file screening when conflicting flags like -o or --json are passed', async () => {
+      const dir = makeTmpDir('ar-cli-multi-');
+      writeFileSync(join(dir, 'f1.txt'), 'clean 1');
+      writeFileSync(join(dir, 'f2.txt'), 'clean 2');
+      const res = await runCli(['f1.txt', 'f2.txt', '-o', 'out.txt'], dir);
+      expect(res.code).toBe(2);
+      expect(res.stderr).toContain('Flags -o/--output, --unmask, and -j/--json cannot be used with multiple input files');
+    });
+
+    it('exits code 0 on multi-file in-place mode with leaks when --check is not passed', async () => {
+      const dir = makeTmpDir('ar-cli-multi-inplace-');
+      writeFileSync(join(dir, 'f1.txt'), `K=${key4()}`);
+      writeFileSync(join(dir, 'f2.txt'), 'clean 2');
+      const res = await runCli(['-i', 'f1.txt', 'f2.txt'], dir);
+      expect(res.code).toBe(0);
+      expect(res.stderr).toContain('All 2 files sanitized');
+    });
+  });
 });
 
 function key4(): string {

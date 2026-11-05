@@ -258,6 +258,84 @@ export const supabaseKeyPattern: RedactPattern = {
 };
 
 /**
+ * Telegram Bot Token (<bot-id>:<35-char-token>)
+ */
+export const telegramBotTokenPattern: RedactPattern = {
+  id: 'telegram-bot-token',
+  name: 'Telegram Bot Token',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
+  placeholder: 'TELEGRAM_BOT_TOKEN',
+  description: 'Telegram Bot API authentication token'
+};
+
+/**
+ * Twilio API Key (SK...)
+ */
+export const twilioApiKeyPattern: RedactPattern = {
+  id: 'twilio-api-key',
+  name: 'Twilio API Key',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bSK[0-9a-fA-F]{32}\b/g,
+  placeholder: 'TWILIO_API_KEY',
+  description: 'Twilio API Key starting with SK prefix'
+};
+
+/**
+ * Azure Storage Connection String / AccountKey
+ */
+export const azureStorageKeyPattern: RedactPattern = {
+  id: 'azure-storage-key',
+  name: 'Azure Storage Key',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bAccountKey=[A-Za-z0-9+/]{86}==|\bAccountKey=[A-Za-z0-9+/=]{88}\b/g,
+  placeholder: 'AZURE_STORAGE_KEY',
+  description: 'Azure Storage Account access key'
+};
+
+/**
+ * GCP OAuth Client Secret (GOCSPX-...)
+ */
+export const gcpOauthSecretPattern: RedactPattern = {
+  id: 'gcp-oauth-client-secret',
+  name: 'GCP OAuth Client Secret',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/g,
+  placeholder: 'GCP_OAUTH_CLIENT_SECRET',
+  description: 'Google Cloud Platform OAuth 2.0 client secret'
+};
+
+/**
+ * DigitalOcean Personal Access Token (dop_v1_...)
+ */
+export const digitalOceanTokenPattern: RedactPattern = {
+  id: 'digitalocean-token',
+  name: 'DigitalOcean Token',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bdop_v1_[a-f0-9]{64}\b/g,
+  placeholder: 'DIGITALOCEAN_TOKEN',
+  description: 'DigitalOcean Personal Access Token'
+};
+
+/**
+ * Mailgun API Key (key-...)
+ */
+export const mailgunApiKeyPattern: RedactPattern = {
+  id: 'mailgun-api-key',
+  name: 'Mailgun API Key',
+  category: 'credential',
+  severity: 'high',
+  regex: /\bkey-[0-9a-zA-Z]{32}\b/g,
+  placeholder: 'MAILGUN_API_KEY',
+  description: 'Mailgun API authentication key'
+};
+
+/**
  * Export array of all built-in credential patterns
  */
 export const CREDENTIAL_PATTERNS: RedactPattern[] = [
@@ -279,5 +357,11 @@ export const CREDENTIAL_PATTERNS: RedactPattern[] = [
   npmTokenPattern,
   sendgridApiKeyPattern,
   twilioAccountSidPattern,
-  supabaseKeyPattern
+  supabaseKeyPattern,
+  telegramBotTokenPattern,
+  twilioApiKeyPattern,
+  azureStorageKeyPattern,
+  gcpOauthSecretPattern,
+  digitalOceanTokenPattern,
+  mailgunApiKeyPattern
 ];

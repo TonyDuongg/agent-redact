@@ -89,7 +89,13 @@ export class RedactEngine {
 
     if (options?.include && options.include.length > 0) {
       const includeSet = new Set(options.include);
-      activePatterns = activePatterns.filter((p) => includeSet.has(p.id));
+      const customIds = new Set((options.customPatterns ?? []).map((p) => p.id));
+      activePatterns = activePatterns.filter(
+        (p) =>
+          includeSet.has(p.id) ||
+          customIds.has(p.id) ||
+          (options.detectHighEntropy && p.id === 'generic-high-entropy-secret')
+      );
     }
 
     if (options?.exclude && options.exclude.length > 0) {
