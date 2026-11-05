@@ -206,6 +206,26 @@ describe('Audit round 3: remaining findings', () => {
       await client.close();
     });
 
+    it('refuses .git aliases (trailing dot/space) and alternate data stream paths', async () => {
+      const repo = makeTmpDir('ar-gitalias-');
+      mkdirSync(join(repo, '.git', 'hooks'), { recursive: true });
+
+      const client = await connectClient([repo]);
+      for (const outputFilePath of [
+        join(repo, '.git.', 'hooks', 'pre-commit'),
+        join(repo, '.git ', 'hooks', 'pre-commit'),
+        join(repo, 'notes.txt:hidden-stream')
+      ]) {
+        const res = await client.callTool({
+          name: 'unmask_text',
+          arguments: { text: 'x', outputFilePath }
+        });
+        expect(res.isError, outputFilePath).toBe(true);
+      }
+      expect(existsSync(join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+      await client.close();
+    });
+
     it('never overwrites an existing .bak backup on repeated in-place scans', async () => {
       const dir = makeTmpDir('ar-bak-');
       const file = join(dir, 'victim.env');

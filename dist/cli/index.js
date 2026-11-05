@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { readFileSync, writeFileSync, existsSync, realpathSync } from 'fs';
+import { readFileSync, writeFileSync, constants, existsSync, realpathSync, openSync, closeSync } from 'fs';
 import { resolve, join, dirname, basename, relative, isAbsolute, sep } from 'path';
 import { tmpdir } from 'os';
 
@@ -784,12 +784,26 @@ function checkPath(targetPath, roots, mode) {
     const rel = relative(root, realTarget);
     const inside = rel === "" || !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
     if (!inside) continue;
-    if (mode === "write" && rel.split(sep).some((segment) => segment.toLowerCase() === ".git")) {
-      return { ok: false, reason: "writing inside a .git directory is not allowed" };
+    if (mode === "write") {
+      const segments = rel.split(sep);
+      if (segments.some((segment) => segment.includes(":"))) {
+        return { ok: false, reason: "not a plain file path" };
+      }
+      if (segments.some((segment) => segment.replace(/[. ]+$/, "").toLowerCase() === ".git")) {
+        return { ok: false, reason: "writing inside a .git directory is not allowed" };
+      }
     }
     return { ok: true, realPath: realTarget };
   }
   return { ok: false, reason: "outside the allowed directories (workspace or temp)" };
+}
+function safeWriteFile(path, content, mode = 420) {
+  const fd = openSync(path, SAFE_WRITE_FLAGS, mode);
+  try {
+    writeFileSync(fd, content, "utf-8");
+  } finally {
+    closeSync(fd);
+  }
 }
 function writeUniqueBackup(file, content) {
   for (let i = 0; i < 1e3; i++) {
@@ -880,7 +894,7 @@ function createMcpServer(options = {}) {
       }
       try {
         const restored = unmask(text, sessionVault);
-        writeFileSync(outCheck.realPath, restored, { encoding: "utf-8", mode: 384 });
+        safeWriteFile(outCheck.realPath, restored, 384);
         return {
           content: [
             {
@@ -939,12 +953,13 @@ function createMcpServer(options = {}) {
         let writtenTo = null;
         if (inPlace) {
           if (result.hasLeaks) {
-            backupPath = writeUniqueBackup(resolvedFile, rawContent);
-            writeFileSync(resolvedFile, result.text, "utf-8");
+            const realBackup = writeUniqueBackup(resolvedFile, rawContent);
+            backupPath = filePath + realBackup.slice(resolvedFile.length);
+            safeWriteFile(resolvedFile, result.text);
             writtenTo = filePath;
           }
         } else if (resolvedOut) {
-          writeFileSync(resolvedOut, result.text, "utf-8");
+          safeWriteFile(resolvedOut, result.text);
           writtenTo = outputFilePath ?? null;
         }
         return {
@@ -1053,11 +1068,13 @@ async function runMcpServer() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
+var SAFE_WRITE_FLAGS;
 var init_server = __esm({
   "src/mcp/server.ts"() {
     init_engine();
     init_vault();
     init_patterns();
+    SAFE_WRITE_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
   }
 });
 

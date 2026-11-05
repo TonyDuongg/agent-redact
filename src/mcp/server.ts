@@ -1,7 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { readFileSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  realpathSync,
+  openSync,
+  closeSync,
+  constants as fsConstants
+} from 'node:fs';
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { redact, unmask } from '../core/engine.js';
@@ -56,14 +64,38 @@ function checkPath(targetPath: string, roots: string[], mode: 'read' | 'write'):
     const inside = rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
     if (!inside) continue;
 
-    // Writing into VCS metadata (e.g. .git/hooks) would allow code execution
-    if (mode === 'write' && rel.split(sep).some((segment) => segment.toLowerCase() === '.git')) {
-      return { ok: false, reason: 'writing inside a .git directory is not allowed' };
+    if (mode === 'write') {
+      const segments = rel.split(sep);
+      // Fail closed on NTFS alternate data streams ("name:stream") anywhere below the root
+      if (segments.some((segment) => segment.includes(':'))) {
+        return { ok: false, reason: 'not a plain file path' };
+      }
+      // Writing into VCS metadata (e.g. .git/hooks) would allow code execution.
+      // Windows ignores trailing dots/spaces, so ".git." and ".git " also mean ".git".
+      if (segments.some((segment) => segment.replace(/[. ]+$/, '').toLowerCase() === '.git')) {
+        return { ok: false, reason: 'writing inside a .git directory is not allowed' };
+      }
     }
     return { ok: true, realPath: realTarget };
   }
 
   return { ok: false, reason: 'outside the allowed directories (workspace or temp)' };
+}
+
+/**
+ * Write flags that refuse to follow a symlink planted at the final path component
+ * after the sandbox check (POSIX only; O_NOFOLLOW is unavailable on Windows).
+ */
+const SAFE_WRITE_FLAGS =
+  fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0);
+
+function safeWriteFile(path: string, content: string, mode = 0o644): void {
+  const fd = openSync(path, SAFE_WRITE_FLAGS, mode);
+  try {
+    writeFileSync(fd, content, 'utf-8');
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Writes a backup without ever overwriting an existing one: file.bak, file.bak.1, ... */
@@ -172,7 +204,7 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
 
       try {
         const restored = unmask(text, sessionVault);
-        writeFileSync(outCheck.realPath, restored, { encoding: 'utf-8', mode: 0o600 });
+        safeWriteFile(outCheck.realPath, restored, 0o600);
         return {
           content: [
             {
@@ -248,12 +280,15 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
           // Only touch the file when there is something to sanitize, and never
           // overwrite an earlier backup (it may hold the only copy of the original secrets).
           if (result.hasLeaks) {
-            backupPath = writeUniqueBackup(resolvedFile, rawContent);
-            writeFileSync(resolvedFile, result.text, 'utf-8');
+            const realBackup = writeUniqueBackup(resolvedFile, rawContent);
+            // Report the backup next to the path the caller used (realpath may differ,
+            // e.g. /var -> /private/var on macOS or 8.3 short names on Windows)
+            backupPath = filePath + realBackup.slice(resolvedFile.length);
+            safeWriteFile(resolvedFile, result.text);
             writtenTo = filePath;
           }
         } else if (resolvedOut) {
-          writeFileSync(resolvedOut, result.text, 'utf-8');
+          safeWriteFile(resolvedOut, result.text);
           writtenTo = outputFilePath ?? null;
         }
 

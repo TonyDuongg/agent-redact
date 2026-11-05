@@ -744,12 +744,27 @@ function checkPath(targetPath, roots, mode) {
     const rel = path.relative(root, realTarget);
     const inside = rel === "" || !path.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${path.sep}`);
     if (!inside) continue;
-    if (mode === "write" && rel.split(path.sep).some((segment) => segment.toLowerCase() === ".git")) {
-      return { ok: false, reason: "writing inside a .git directory is not allowed" };
+    if (mode === "write") {
+      const segments = rel.split(path.sep);
+      if (segments.some((segment) => segment.includes(":"))) {
+        return { ok: false, reason: "not a plain file path" };
+      }
+      if (segments.some((segment) => segment.replace(/[. ]+$/, "").toLowerCase() === ".git")) {
+        return { ok: false, reason: "writing inside a .git directory is not allowed" };
+      }
     }
     return { ok: true, realPath: realTarget };
   }
   return { ok: false, reason: "outside the allowed directories (workspace or temp)" };
+}
+var SAFE_WRITE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW ?? 0);
+function safeWriteFile(path, content, mode = 420) {
+  const fd = fs.openSync(path, SAFE_WRITE_FLAGS, mode);
+  try {
+    fs.writeFileSync(fd, content, "utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 function writeUniqueBackup(file, content) {
   for (let i = 0; i < 1e3; i++) {
@@ -840,7 +855,7 @@ function createMcpServer(options = {}) {
       }
       try {
         const restored = unmask(text, sessionVault);
-        fs.writeFileSync(outCheck.realPath, restored, { encoding: "utf-8", mode: 384 });
+        safeWriteFile(outCheck.realPath, restored, 384);
         return {
           content: [
             {
@@ -899,12 +914,13 @@ function createMcpServer(options = {}) {
         let writtenTo = null;
         if (inPlace) {
           if (result.hasLeaks) {
-            backupPath = writeUniqueBackup(resolvedFile, rawContent);
-            fs.writeFileSync(resolvedFile, result.text, "utf-8");
+            const realBackup = writeUniqueBackup(resolvedFile, rawContent);
+            backupPath = filePath + realBackup.slice(resolvedFile.length);
+            safeWriteFile(resolvedFile, result.text);
             writtenTo = filePath;
           }
         } else if (resolvedOut) {
-          fs.writeFileSync(resolvedOut, result.text, "utf-8");
+          safeWriteFile(resolvedOut, result.text);
           writtenTo = outputFilePath ?? null;
         }
         return {
