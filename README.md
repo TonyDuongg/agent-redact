@@ -233,16 +233,60 @@ const result = redact('custom_token = "d9F8qZ1_pLm4wK7aQx0vN2yB8rC3eH6j"', {
 
 ---
 
-### 7. Model Context Protocol (MCP) Server (Claude, Cursor, Zed, Windsurf)
+### 7. Model Context Protocol (MCP) Server (Claude, Cursor, Windsurf, VS Code)
 
-`agent-redact` includes a native Model Context Protocol (MCP) server that empowers Claude Desktop and Claude Code to sanitize user input and file content on-the-fly before ingesting it into context.
+`agent-redact` includes a native Model Context Protocol (MCP) server that empowers any AI assistant to sanitize prompts and local files before ingesting them into context.
 
-#### Claude Desktop Configuration
-Add `agent-redact` to your `claude_desktop_config.json`:
-
+#### A. Claude Desktop
+Add `agent-redact` to `claude_desktop_config.json`:
 * **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 * **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
+```json
+{
+  "mcpServers": {
+    "agent-redact": {
+      "command": "npx",
+      "args": ["-y", "agent-redact", "mcp"]
+    }
+  }
+}
+```
+
+#### B. Claude Code CLI
+Add the server with one command in your terminal:
+```bash
+claude mcp add agent-redact -- npx -y agent-redact mcp
+```
+
+#### C. Cursor IDE
+Create or edit `.cursor/mcp.json` in your workspace or global settings:
+```json
+{
+  "mcpServers": {
+    "agent-redact": {
+      "command": "npx",
+      "args": ["-y", "agent-redact", "mcp"]
+    }
+  }
+}
+```
+
+#### D. Windsurf IDE
+Add to `~/.codeium/windsurf/mcp_config.json`:
+```json
+{
+  "mcpServers": {
+    "agent-redact": {
+      "command": "npx",
+      "args": ["-y", "agent-redact", "mcp"]
+    }
+  }
+}
+```
+
+#### E. VS Code (Cline / Roo Code)
+Add to `cline_mcp_settings.json`:
 ```json
 {
   "mcpServers": {
@@ -259,15 +303,54 @@ Add `agent-redact` to your `claude_desktop_config.json`:
 | Tool | Purpose |
 | :--- | :--- |
 | `redact_text` | Scans and redacts credentials/PII, optionally allocating reversible session placeholders |
-| `unmask_text` | Restores `[ANTHROPIC_API_KEY_1]` placeholders in Claude's output back to real keys in local session |
-| `scan_file` | Audits and redacts sensitive content in `.env`, config, or log files before Claude reads them |
+| `unmask_text` | Restores `[ANTHROPIC_API_KEY_1]` placeholders in agent responses back to real keys locally |
+| `scan_file` | Audits and redacts sensitive content in `.env`, config, or log files before agent reads them |
 | `get_vault_status` | Inspects currently vaulted placeholders and timestamps without exposing plaintext secrets |
 | `clear_vault` | Wipes in-memory vault when session concludes |
 | `list_supported_patterns` | Queries all active secret definitions and threat levels |
 
 ---
 
-### 8. GitHub Action for CI/CD Secret Screening
+### 8. Multi-Language & Python Agents (LangChain, AutoGen, CrewAI)
+
+For Python, Go, Rust, or any non-Node environment, `agent-redact` integrates seamlessly via CLI subprocess or stdin pipes:
+
+```python
+import subprocess
+import json
+
+def sanitize_prompt_for_agent(raw_prompt: str) -> str:
+    """Pipes sensitive prompts through agent-redact before sending to any LLM."""
+    proc = subprocess.run(
+        ["npx", "-y", "agent-redact", "-r"],
+        input=raw_prompt,
+        text=True,
+        capture_output=True,
+        check=True
+    )
+    return proc.stdout
+
+# Safe to send to LangChain, AutoGen, or CrewAI:
+clean_prompt = sanitize_prompt_for_agent("My API key is sk-ant-api03-xxx and DB is postgres://...")
+print(clean_prompt)
+# => "My API key is [ANTHROPIC_API_KEY_1] and DB is [DATABASE_URL_1]"
+```
+
+---
+
+### 9. Docker & Container Workflows
+
+Add zero-latency secret screening to your Docker container pipelines:
+
+```dockerfile
+# Run directly in any Node.js container
+RUN npm install -g agent-redact
+ENTRYPOINT ["agent-redact"]
+```
+
+---
+
+### 10. GitHub Action for CI/CD Secret Screening
 
 Automatically scan Pull Requests and commits for leaked credentials before they can be merged. Add `.github/workflows/secret-audit.yml`:
 
@@ -297,7 +380,7 @@ jobs:
 
 ---
 
-### 9. Pre-commit Git Hook
+### 11. Pre-commit Git Hook
 
 Prevent accidental credential commits locally using [pre-commit](https://pre-commit.com):
 

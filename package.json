@@ -1,7 +1,7 @@
 {
   "name": "agent-redact",
   "version": "0.1.1",
-  "description": "Zero-latency, zero-leak secret & PII redactor for LLMs, Claude Code, and Agentic workflows",
+  "description": "Zero-latency, zero-leak secret & PII redactor for ALL AI Agents, LLMs, and Multi-Agent Workflows",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
