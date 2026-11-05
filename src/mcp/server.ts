@@ -8,6 +8,7 @@ import {
   realpathSync,
   openSync,
   closeSync,
+  fchmodSync,
   constants as fsConstants
 } from 'node:fs';
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path';
@@ -93,6 +94,11 @@ function safeWriteFile(path: string, content: string, mode = 0o644): void {
   const fd = openSync(path, SAFE_WRITE_FLAGS, mode);
   try {
     writeFileSync(fd, content, 'utf-8');
+    try {
+      fchmodSync(fd, mode);
+    } catch {
+      // fchmod may be unavailable or fail on Windows / non-POSIX
+    }
   } finally {
     closeSync(fd);
   }
@@ -125,7 +131,7 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
 
   const server = new McpServer({
     name: 'agent-redact',
-    version: '0.1.2'
+    version: '0.1.3'
   });
 
   // Tool 1: redact_text

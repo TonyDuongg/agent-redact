@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.3] - 2026-11-05
+
+### 🔒 Security & Sandbox Hardening
+- **MCP Symlink & Junction Resolution**: Sandbox verification now checks real canonical targets (`realpathSync.native`), completely preventing sandbox escapes via planted symlinks, junctions, or NTFS alternate data streams.
+- **VCS Hook Protection**: Refused all write operations targeting `.git` directory trees (including `.git.` / `.git ` and 8.3 short name `GIT~1`), preventing malicious prompt injections from overwriting Git hooks.
+- **Backup File Preservation**: `scan_file({ inPlace: true })` uses atomic unique allocation (`.bak`, `.bak.1`, ...) with `wx` flag and never overwrites an existing backup.
+- **Strict File Permissions**: Enforced `0600` permissions (`rw-------`) via `fchmodSync` on open file descriptors and existing vault files.
+- **Release Workflow Fix**: Gated npm publish on job-level token boolean, failing loudly if `NPM_TOKEN` is missing, and enforcing git tag version parity with `package.json`.
+
+### 🎯 Pattern Precision
+- **IPv6 Code Protection**: Added validator to distinguish real IPv6 addresses from Python slice indices (`arr[::2]`, `arr[1::2]`) and C++/Rust hex namespaces (`db::add`, `dead::beef`).
+- **URL Path Disambiguation**: Excluded path slashes from userinfo in database and basic-auth URL regexes, eliminating false positives on `http://localhost:5173/@vite/client` and npm registry scopes (`@types/node`).
+- **Domestic Vietnamese Phone Numbers**: Added support for 10-digit Vietnamese local mobile numbers (`0912 345 678`, `0912345678`, `03...`, `05...`, `07...`, `08...`, `09...`).
+
+### ⚡ Vault & Stream Hardening
+- **Reversible Custom Formatter Invariant**: Custom formatters that return identical placeholders for different secrets now fail fast with an informative error rather than silently returning corrupted credentials.
+- **Idempotent Vault Restoration**: `Vault.restoreEntry` is now idempotent and `Vault.size` accurately counts distinct secrets.
+- **Stream Unclosed PEM Redaction**: Incomplete private key PEM blocks exceeding stream buffers or reaching EOF are masked as `[REDACTED_PRIVATE_KEY]`, preventing raw key body lines from leaking unredacted.
+- **CLI Quiet Check**: Running `--check` on a single file suppresses stdout streaming of the entire file, keeping pre-commit hooks clean and concise.
+
+---
+
 ## [0.1.2] - 2026-11-05
 
 ### ⚠️ Breaking Changes

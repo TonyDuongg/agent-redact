@@ -298,9 +298,9 @@ var init_pii = __esm({
       name: "Phone Number",
       category: "pii",
       severity: "medium",
-      regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b)/g,
+      regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b)/g,
       placeholder: "PHONE_NUMBER",
-      description: "Telephone number in formatted local or international E.164 format"
+      description: "Telephone number in formatted local, international E.164, or domestic VN format"
     };
     PII_PATTERNS = [
       emailPattern,
@@ -803,6 +803,10 @@ function safeWriteFile(path, content, mode = 420) {
   const fd = fs.openSync(path, SAFE_WRITE_FLAGS, mode);
   try {
     fs.writeFileSync(fd, content, "utf-8");
+    try {
+      fs.fchmodSync(fd, mode);
+    } catch {
+    }
   } finally {
     fs.closeSync(fd);
   }
@@ -830,7 +834,7 @@ function createMcpServer(options = {}) {
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
   const server = new mcp_js.McpServer({
     name: "agent-redact",
-    version: "0.1.2"
+    version: "0.1.3"
   });
   server.tool(
     "redact_text",
@@ -1142,6 +1146,13 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
 }
 
 // src/cli/index.ts
+function writeSecureFile(filePath, content) {
+  fs.writeFileSync(filePath, content, { encoding: "utf-8", mode: 384 });
+  try {
+    fs.chmodSync(filePath, 384);
+  } catch {
+  }
+}
 var colors = {
   reset: "\x1B[0m",
   bold: "\x1B[1m",
@@ -1156,7 +1167,7 @@ var colors = {
 };
 function printHelp() {
   const helpText = `
-${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.2${colors.reset}
+${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.3${colors.reset}
 ${colors.dim}Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents${colors.reset}
 
 ${colors.bold}USAGE:${colors.reset}
@@ -1214,7 +1225,7 @@ async function main() {
     process.exit(0);
   }
   if (args.includes("-v") || args.includes("--version")) {
-    console.log("agent-redact v0.1.2");
+    console.log("agent-redact v0.1.3");
     process.exit(0);
   }
   const isReversible = args.includes("-r") || args.includes("--reversible");
@@ -1281,10 +1292,10 @@ async function main() {
       }
     }
     if (vaultOutFile && vault) {
-      fs.writeFileSync(vaultOutFile, vault.toJSON(), { encoding: "utf-8", mode: 384 });
+      writeSecureFile(vaultOutFile, vault.toJSON());
       console.error(`${colors.green}\u2714${colors.reset} Session vault saved to ${vaultOutFile}`);
     }
-    if (totalLeaksAcrossFiles > 0) {
+    if (totalLeaksAcrossFiles > 0 && (failOnLeak || !isInplace)) {
       console.error(
         `
 ${colors.red}[agent-redact] Audit failed: detected ${totalLeaksAcrossFiles} secret(s) across ${fileArgs.length} files.${colors.reset}`
@@ -1293,7 +1304,7 @@ ${colors.red}[agent-redact] Audit failed: detected ${totalLeaksAcrossFiles} secr
     } else {
       console.error(
         `
-${colors.green}[agent-redact] All ${fileArgs.length} files are clean.${colors.reset}`
+${colors.green}[agent-redact] All ${fileArgs.length} files ${isInplace ? "sanitized" : "are clean"}.${colors.reset}`
       );
       process.exit(0);
     }
@@ -1345,7 +1356,7 @@ ${colors.green}[agent-redact] All ${fileArgs.length} files are clean.${colors.re
     entropy: loadedConfig?.entropy
   });
   if (vaultOutFile && vault) {
-    fs.writeFileSync(vaultOutFile, vault.toJSON(), { encoding: "utf-8", mode: 384 });
+    writeSecureFile(vaultOutFile, vault.toJSON());
     console.error(`${colors.green}\u2714${colors.reset} Session vault saved to ${vaultOutFile}`);
   }
   if (isJson) {
@@ -1357,7 +1368,7 @@ ${colors.green}[agent-redact] All ${fileArgs.length} files are clean.${colors.re
     } else if (isInplace && fileArg) {
       fs.writeFileSync(fileArg, result.text, "utf-8");
       console.error(`${colors.green}\u2714${colors.reset} Sanitized in-place: ${fileArg}`);
-    } else {
+    } else if (!failOnLeak) {
       process.stdout.write(result.text);
     }
     if (result.hasLeaks || showStats) {

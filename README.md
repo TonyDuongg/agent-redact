@@ -322,6 +322,9 @@ Add to `cline_mcp_settings.json`:
 | `clear_vault` | Wipes in-memory vault when session concludes |
 | `list_supported_patterns` | Queries all active secret definitions and threat levels |
 
+> [!WARNING]
+> **MCP Context Isolation**: Files written by `unmask_text` contain plaintext secrets directly on disk. Ensure your agent prompts or tool permissions prohibit reading restored files back into the model context.
+
 ---
 
 ### 8. Multi-Language & Python Agents (LangChain, AutoGen, CrewAI)
@@ -411,7 +414,7 @@ Prevent accidental credential commits locally using [pre-commit](https://pre-com
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/TonyDuongg/agent-redact
-    rev: v0.1.2
+    rev: v0.1.3
     hooks:
       - id: agent-redact
 ```
@@ -489,7 +492,7 @@ npm run bench
   * Official GitHub Action (`action.yml`) with in-PR file & line annotations.
   * Markdown Step Summary table in GitHub Actions runner.
   * `.pre-commit-hooks.yaml` for pre-commit git hooks.
-* [x] **v1.6 (NPM Public Distribution & Multi-OS CI)**:
+* [ ] **v1.6 (NPM Public Distribution & Multi-OS CI)**:
   * Official public publishing to npm registry (`npm install agent-redact`).
   * Cross-platform support (Ubuntu, Windows, macOS) across Node.js 20, 22, and 24.
   * GitHub Release with automated verification and security audit conformance.

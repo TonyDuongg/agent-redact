@@ -276,9 +276,9 @@ var phonePattern = {
   name: "Phone Number",
   category: "pii",
   severity: "medium",
-  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b)/g,
+  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b)/g,
   placeholder: "PHONE_NUMBER",
-  description: "Telephone number in formatted local or international E.164 format"
+  description: "Telephone number in formatted local, international E.164, or domestic VN format"
 };
 var PII_PATTERNS = [
   emailPattern,
@@ -733,7 +733,15 @@ var RedactTransformStream = class extends Transform {
     const lastBegin = this.buffer.search(PEM_BEGIN_PATTERN);
     if (lastBegin !== -1) {
       const remaining = this.buffer.slice(lastBegin);
-      if (!PEM_END_PATTERN.test(remaining) && this.buffer.length < 65536) {
+      if (!PEM_END_PATTERN.test(remaining)) {
+        if (this.buffer.length < 1048576) {
+          callback();
+          return;
+        }
+        const before = this.buffer.slice(0, lastBegin);
+        const prefixRes = redact(before, { ...this.options, vault: this.vault });
+        this.push(prefixRes.text + "[REDACTED_PRIVATE_KEY]\n");
+        this.buffer = "";
         callback();
         return;
       }
@@ -755,11 +763,18 @@ var RedactTransformStream = class extends Transform {
   _flush(callback) {
     this.buffer += this.decoder.end();
     if (this.buffer.length > 0) {
-      const res = redact(this.buffer, {
-        ...this.options,
-        vault: this.vault
-      });
-      this.push(res.text);
+      const lastBegin = this.buffer.search(PEM_BEGIN_PATTERN);
+      if (lastBegin !== -1 && !PEM_END_PATTERN.test(this.buffer.slice(lastBegin))) {
+        const before = this.buffer.slice(0, lastBegin);
+        const prefixRes = redact(before, { ...this.options, vault: this.vault });
+        this.push(prefixRes.text + "[REDACTED_PRIVATE_KEY]");
+      } else {
+        const res = redact(this.buffer, {
+          ...this.options,
+          vault: this.vault
+        });
+        this.push(res.text);
+      }
       this.buffer = "";
     }
     callback();

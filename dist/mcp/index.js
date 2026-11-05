@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { constants, existsSync, readFileSync, realpathSync, openSync, writeFileSync, closeSync } from 'fs';
+import { constants, existsSync, readFileSync, realpathSync, openSync, writeFileSync, fchmodSync, closeSync } from 'fs';
 import { resolve, join, dirname, basename, relative, isAbsolute, sep } from 'path';
 import { tmpdir } from 'os';
 
@@ -286,9 +286,9 @@ var phonePattern = {
   name: "Phone Number",
   category: "pii",
   severity: "medium",
-  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b)/g,
+  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b|(?<![\w$])\b0[35789](?:[0-9]{8}|[0-9]{2}[-.\s][0-9]{3}[-.\s][0-9]{3}|[0-9][-.\s][0-9]{3}[-.\s][0-9]{4})\b)/g,
   placeholder: "PHONE_NUMBER",
-  description: "Telephone number in formatted local or international E.164 format"
+  description: "Telephone number in formatted local, international E.164, or domestic VN format"
 };
 var PII_PATTERNS = [
   emailPattern,
@@ -759,6 +759,10 @@ function safeWriteFile(path, content, mode = 420) {
   const fd = openSync(path, SAFE_WRITE_FLAGS, mode);
   try {
     writeFileSync(fd, content, "utf-8");
+    try {
+      fchmodSync(fd, mode);
+    } catch {
+    }
   } finally {
     closeSync(fd);
   }
@@ -786,7 +790,7 @@ function createMcpServer(options = {}) {
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
   const server = new McpServer({
     name: "agent-redact",
-    version: "0.1.2"
+    version: "0.1.3"
   });
   server.tool(
     "redact_text",

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { redact, Vault } from '../src/index.js';
+import { redact, Vault, createRedactStream } from '../src/index.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -274,6 +274,48 @@ describe('Audit round 3: remaining findings', () => {
       expect(readFileSync(thirdBackup, 'utf-8')).toContain('ghp_');
       expect(readFileSync(`${file}.bak`, 'utf-8')).toBe(`AWS=${key}\n`);
       await client.close();
+    });
+
+    it('detects Vietnamese local mobile phone numbers', () => {
+      expect(redact('Lien he 0912 345 678 hoac 0912345678').text).toBe(
+        'Lien he [REDACTED_PHONE_NUMBER] hoac [REDACTED_PHONE_NUMBER]'
+      );
+      expect(redact('SDT: 0389-123-456 va 0868.123.456').text).toBe(
+        'SDT: [REDACTED_PHONE_NUMBER] va [REDACTED_PHONE_NUMBER]'
+      );
+    });
+
+    it('redacts unclosed private key PEM block at EOF in stream', async () => {
+      const s = createRedactStream();
+      let out = '';
+      s.on('data', (d) => (out += d));
+      await new Promise<void>((resolve) => {
+        s.on('end', resolve);
+        s.write('-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASC\n');
+        s.end();
+      });
+      expect(out).toContain('[REDACTED_PRIVATE_KEY]');
+      expect(out).not.toContain('MIIEvgIBADAN');
+    });
+
+    it('suppresses stdout output in single-file --check mode', async () => {
+      const f = join(tmpdir(), `check-quiet-${Date.now()}.env`);
+      const key = sampleKey('AKIA', 'IOSFODNN7EXAMPLE');
+      writeFileSync(f, `KEY=${key}\n`, 'utf-8');
+      const cliPath = join(process.cwd(), 'dist', 'cli', 'index.js');
+      try {
+        const { execFile } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execFileAsync = promisify(execFile);
+        await execFileAsync(process.execPath, [cliPath, f, '--check']);
+        expect.fail('should fail with exit code 1');
+      } catch (err: any) {
+        expect(err.code).toBe(1);
+        expect(err.stdout).toBe('');
+        expect(err.stderr).toContain('Detected & masked 1 secret(s)');
+      } finally {
+        unlinkSync(f);
+      }
     });
   });
 });
