@@ -35,6 +35,7 @@ ${colors.bold}OPTIONS:${colors.reset}
   -j, --json                  Output result and leak metadata as JSON
   --config <path>             Path to configuration file (.agentredactrc or json)
   --entropy                   Enable Shannon entropy detection for generic secrets
+  --check, --fail-on-leak     Exit with code 1 if any secrets are detected (CI/pre-commit)
   --vault-out <file>          Save generated session vault mappings to JSON file
   --unmask <vaultFile>        Restore previously masked file using saved vault file
   --stats                     Display leak statistics breakdown table
@@ -92,6 +93,7 @@ async function main(): Promise<void> {
   const showStats = args.includes('--stats');
   const isInplace = args.includes('-i') || args.includes('--inplace');
   const detectEntropy = args.includes('--entropy');
+  const failOnLeak = args.includes('--check') || args.includes('--fail-on-leak');
 
   const outputIdx = args.findIndex((a) => a === '-o' || a === '--output');
   const outputFile = outputIdx !== -1 && args[outputIdx + 1] ? args[outputIdx + 1] : undefined;
@@ -167,7 +169,7 @@ async function main(): Promise<void> {
     }
 
     if (vaultOutFile && vault) {
-      writeFileSync(vaultOutFile, vault.toJSON(), 'utf-8');
+      writeFileSync(vaultOutFile, vault.toJSON(), { encoding: 'utf-8', mode: 0o600 });
       console.error(`${colors.green}✔${colors.reset} Session vault saved to ${vaultOutFile}`);
     }
 
@@ -239,7 +241,7 @@ async function main(): Promise<void> {
 
   // Save vault file if requested
   if (vaultOutFile && vault) {
-    writeFileSync(vaultOutFile, vault.toJSON(), 'utf-8');
+    writeFileSync(vaultOutFile, vault.toJSON(), { encoding: 'utf-8', mode: 0o600 });
     console.error(`${colors.green}✔${colors.reset} Session vault saved to ${vaultOutFile}`);
   }
 
@@ -275,8 +277,8 @@ async function main(): Promise<void> {
     }
   }
 
-  // Exit with code 1 if secrets were detected during a scan (no output file and not reversible)
-  if (result.hasLeaks && !outputFile && !effectiveReversible && !isInplace) {
+  // Exit with code 1 only if --check / --fail-on-leak is explicitly requested and leaks were detected
+  if (result.hasLeaks && failOnLeak) {
     process.exit(1);
   }
 }

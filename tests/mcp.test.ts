@@ -60,15 +60,24 @@ describe('MCP Server Integration (Model Context Protocol)', () => {
     expect(vaultStatus.vaultSize).toBe(1);
     expect(vaultStatus.entries[0].placeholder).toBe('[ANTHROPIC_API_KEY_1]');
 
-    // 4. Call unmask_text to restore secrets in Claude's output
+    // 4. Call unmask_text to restore secrets safely to disk
+    const targetFile = 'unmask-test-output.txt';
     const unmaskCall = await client.callTool({
       name: 'unmask_text',
       arguments: {
-        text: 'I used [ANTHROPIC_API_KEY_1] to authenticate Claude.'
+        text: 'I used [ANTHROPIC_API_KEY_1] to authenticate Claude.',
+        outputFilePath: targetFile
       }
     });
-    const unmaskedText = (unmaskCall.content as Array<{ text: string }>)[0]!.text;
-    expect(unmaskedText).toBe(`I used ${fakeKey} to authenticate Claude.`);
+    const unmaskResponse = (unmaskCall.content as Array<{ text: string }>)[0]!.text;
+    expect(unmaskResponse).toContain('Successfully restored content to');
+    expect(unmaskResponse).not.toContain(fakeKey);
+
+    const { readFileSync, unlinkSync, existsSync } = await import('node:fs');
+    expect(existsSync(targetFile)).toBe(true);
+    const diskContent = readFileSync(targetFile, 'utf-8');
+    expect(diskContent).toBe(`I used ${fakeKey} to authenticate Claude.`);
+    unlinkSync(targetFile);
 
     // 5. Test clear_vault
     const clearCall = await client.callTool({

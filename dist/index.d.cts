@@ -1,5 +1,5 @@
-import { R as RedactPattern, V as VaultEntry, a as RedactOptions, b as RedactResult, E as EntropyConfig, S as SecretCategory, c as Severity } from './index-CAVNfRPo.cjs';
-export { C as CREDENTIAL_PATTERNS, D as DEFAULT_PATTERNS, P as PATTERN_MAP, d as PII_PATTERNS, e as RedactMatch, f as anthropicApiKeyPattern, g as awsAccessKeyPattern, h as awsSecretKeyPattern, i as calculateShannonEntropy, j as createHighEntropyPattern, k as creditCardPattern, l as databaseUriPattern, m as databaseUrlPattern, n as discordTokenPattern, o as emailPattern, p as githubTokenPattern, q as gitlabTokenPattern, r as googleApiKeyPattern, s as huggingFaceTokenPattern, t as ipv4Pattern, u as ipv6Pattern, v as isHighEntropyToken, w as jwtTokenPattern, x as npmTokenPattern, y as openaiApiKeyPattern, z as phonePattern, A as privateKeyPattern, B as sendgridApiKeyPattern, F as slackTokenPattern, G as ssnPattern, H as stripeKeyPattern, I as supabaseKeyPattern, J as twilioAccountSidPattern } from './index-CAVNfRPo.cjs';
+import { R as RedactPattern, V as VaultEntry, a as RedactOptions, b as RedactResult, E as EntropyConfig, S as SecretCategory, c as Severity } from './index-D_FozwNg.cjs';
+export { C as CREDENTIAL_PATTERNS, D as DEFAULT_PATTERNS, P as PATTERN_MAP, d as PII_PATTERNS, e as RedactMatch, f as anthropicApiKeyPattern, g as awsAccessKeyPattern, h as awsSecretKeyPattern, i as basicAuthUrlPattern, j as calculateShannonEntropy, k as createHighEntropyPattern, l as creditCardPattern, m as databaseUriPattern, n as databaseUrlPattern, o as discordTokenPattern, p as emailPattern, q as githubTokenPattern, r as gitlabTokenPattern, s as googleApiKeyPattern, t as huggingFaceTokenPattern, u as ipv4Pattern, v as ipv6Pattern, w as isHighEntropyToken, x as jwtTokenPattern, y as npmTokenPattern, z as openaiApiKeyPattern, A as phonePattern, B as privateKeyPattern, F as sendgridApiKeyPattern, G as slackTokenPattern, H as ssnPattern, I as stripeKeyPattern, J as supabaseKeyPattern, K as twilioAccountSidPattern } from './index-D_FozwNg.cjs';
 import { Transform, TransformCallback } from 'node:stream';
 
 /**
@@ -8,6 +8,7 @@ import { Transform, TransformCallback } from 'node:stream';
  */
 declare class Vault {
     private placeholderToEntry;
+    private placeholderToEntries;
     private originalToPlaceholder;
     private counters;
     /**
@@ -22,7 +23,8 @@ declare class Vault {
     getOriginal(placeholder: string): string | undefined;
     /**
      * Replaces all placeholders in a string back with their original secrets
-     * in a deterministic, collision-free single regex pass.
+     * in a deterministic, collision-free single regex pass. Handles multiple
+     * secrets mapped to identical custom placeholders sequentially.
      */
     unmask(text: string): string;
     /**

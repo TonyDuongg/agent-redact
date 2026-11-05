@@ -2,16 +2,32 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { resolve, relative, isAbsolute } from 'node:path';
+import { tmpdir } from 'node:os';
 import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
 import { DEFAULT_PATTERNS } from '../patterns/index.js';
+
+function isPathInAllowedDirectories(targetPath: string): boolean {
+  const allowedRoots = [
+    resolve(process.cwd()),
+    resolve(tmpdir()),
+    ...(process.env.AGENT_REDACT_ALLOWED_DIR ? [resolve(process.env.AGENT_REDACT_ALLOWED_DIR)] : [])
+  ];
+
+  const resolvedTarget = resolve(targetPath);
+  return allowedRoots.some((root) => {
+    const rel = relative(root, resolvedTarget);
+    return !rel.startsWith('..') && !isAbsolute(rel);
+  });
+}
 
 export function createMcpServer(): McpServer {
   const sessionVault = new Vault();
 
   const server = new McpServer({
     name: 'agent-redact',
-    version: '0.1.0'
+    version: '0.1.2'
   });
 
   // Tool 1: redact_text
@@ -61,37 +77,59 @@ export function createMcpServer(): McpServer {
   // Tool 2: unmask_text
   server.tool(
     'unmask_text',
-    'Restores masked session placeholders (e.g. [ANTHROPIC_API_KEY_1]) in agent response back to original secret values using the secure in-memory vault. If outputFilePath is specified, writes to disk directly to isolate credentials from chat context.',
+    'Restores masked session placeholders (e.g. [ANTHROPIC_API_KEY_1]) in agent response back to original secret values using the secure in-memory vault. Writes content directly to disk at outputFilePath to prevent exposing plaintext secrets in context.',
     {
       text: z.string().describe('The text containing session placeholders to restore'),
       outputFilePath: z
         .string()
-        .optional()
         .describe(
-          'Optional path to file where restored content should be written without leaking plaintext secrets in context'
+          'Target file path where restored content will be written. Required: plaintext secrets are never exposed in model context.'
         )
     },
     async ({ text, outputFilePath }) => {
-      const restored = unmask(text, sessionVault);
-      if (outputFilePath) {
-        writeFileSync(outputFilePath, restored, 'utf-8');
+      if (!outputFilePath || outputFilePath.trim().length === 0) {
         return {
+          isError: true,
           content: [
             {
               type: 'text',
-              text: `Successfully restored content to ${outputFilePath}. Plaintext secrets were not exposed in context.`
+              text: 'Error: outputFilePath is required. For security, unmasked secrets cannot be returned to the conversation context.'
             }
           ]
         };
       }
-      return {
-        content: [
-          {
-            type: 'text',
-            text: restored
-          }
-        ]
-      };
+
+      if (!isPathInAllowedDirectories(outputFilePath)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Security error: outputFilePath "${outputFilePath}" is outside the allowed directories (workspace or temp).`
+            }
+          ]
+        };
+      }
+
+      try {
+        const restored = unmask(text, sessionVault);
+        const resolvedPath = resolve(process.cwd(), outputFilePath);
+        writeFileSync(resolvedPath, restored, { encoding: 'utf-8', mode: 0o600 });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Successfully restored content to ${outputFilePath}. Plaintext secrets were safely written to disk and remain isolated from model context.`
+            }
+          ]
+        };
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed writing to ${outputFilePath}: ${errorMsg}` }]
+        };
+      }
     }
   );
 
@@ -108,14 +146,39 @@ export function createMcpServer(): McpServer {
       inPlace: z
         .boolean()
         .default(false)
-        .describe('If true, sanitizes the file directly in-place on disk'),
+        .describe('If true, sanitizes the file directly in-place on disk after creating a .bak backup'),
       outputFilePath: z
         .string()
         .optional()
-        .describe('Optional destination path to write sanitized content')
+        .describe('Optional destination path within workspace to write sanitized content')
     },
     async ({ filePath, reversible, inPlace, outputFilePath }) => {
-      if (!existsSync(filePath)) {
+      if (!isPathInAllowedDirectories(filePath)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Security error: filePath "${filePath}" is outside the allowed directories (workspace or temp).`
+            }
+          ]
+        };
+      }
+
+      if (outputFilePath && !isPathInAllowedDirectories(outputFilePath)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Security error: outputFilePath "${outputFilePath}" is outside the allowed directories (workspace or temp).`
+            }
+          ]
+        };
+      }
+
+      const resolvedFile = resolve(process.cwd(), filePath);
+      if (!existsSync(resolvedFile)) {
         return {
           isError: true,
           content: [
@@ -128,13 +191,18 @@ export function createMcpServer(): McpServer {
       }
 
       try {
-        const rawContent = readFileSync(filePath, 'utf-8');
+        const rawContent = readFileSync(resolvedFile, 'utf-8');
         const result = redact(rawContent, { reversible, vault: sessionVault });
 
+        let backupPath: string | null = null;
         if (inPlace) {
-          writeFileSync(filePath, result.text, 'utf-8');
+          backupPath = `${resolvedFile}.bak`;
+          // Always create .bak backup before destructive in-place write
+          writeFileSync(backupPath, rawContent, { encoding: 'utf-8', mode: 0o600 });
+          writeFileSync(resolvedFile, result.text, 'utf-8');
         } else if (outputFilePath) {
-          writeFileSync(outputFilePath, result.text, 'utf-8');
+          const resolvedOut = resolve(process.cwd(), outputFilePath);
+          writeFileSync(resolvedOut, result.text, 'utf-8');
         }
 
         return {
@@ -149,6 +217,7 @@ export function createMcpServer(): McpServer {
                   totalLeaks: result.totalLeaks,
                   stats: result.stats,
                   durationMs: result.durationMs,
+                  backupCreated: backupPath,
                   writtenTo: inPlace ? filePath : (outputFilePath ?? null)
                 },
                 null,
@@ -161,7 +230,7 @@ export function createMcpServer(): McpServer {
         const errorMsg = err instanceof Error ? err.message : String(err);
         return {
           isError: true,
-          content: [{ type: 'text', text: `Failed reading file ${filePath}: ${errorMsg}` }]
+          content: [{ type: 'text', text: `Failed reading/writing file ${filePath}: ${errorMsg}` }]
         };
       }
     }

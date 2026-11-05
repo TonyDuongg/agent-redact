@@ -6,6 +6,7 @@ import type { RedactPattern, VaultEntry } from './types.js';
  */
 export class Vault {
   private placeholderToEntry = new Map<string, VaultEntry>();
+  private placeholderToEntries = new Map<string, VaultEntry[]>();
   private originalToPlaceholder = new Map<string, string>();
   private counters = new Map<string, number>();
 
@@ -39,6 +40,7 @@ export class Vault {
     };
 
     this.placeholderToEntry.set(placeholder, entry);
+    this.placeholderToEntries.set(placeholder, [entry]);
     this.originalToPlaceholder.set(original, placeholder);
 
     return placeholder;
@@ -53,15 +55,16 @@ export class Vault {
 
   /**
    * Replaces all placeholders in a string back with their original secrets
-   * in a deterministic, collision-free single regex pass.
+   * in a deterministic, collision-free single regex pass. Handles multiple
+   * secrets mapped to identical custom placeholders sequentially.
    */
   public unmask(text: string): string {
-    if (this.placeholderToEntry.size === 0 || !text) {
+    if (this.placeholderToEntries.size === 0 || !text) {
       return text;
     }
 
     // Sort placeholders by length descending to prevent substring collisions
-    const placeholders = Array.from(this.placeholderToEntry.keys()).sort(
+    const placeholders = Array.from(this.placeholderToEntries.keys()).sort(
       (a, b) => b.length - a.length
     );
 
@@ -69,9 +72,20 @@ export class Vault {
     const escaped = placeholders.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     const regex = new RegExp(escaped.join('|'), 'g');
 
+    const occurrences = new Map<string, number>();
+
     return text.replace(regex, (matched) => {
-      const entry = this.placeholderToEntry.get(matched);
-      return entry ? entry.original : matched;
+      const list = this.placeholderToEntries.get(matched);
+      if (!list || list.length === 0) {
+        return matched;
+      }
+      if (list.length === 1) {
+        return list[0]!.original;
+      }
+      const idx = occurrences.get(matched) ?? 0;
+      occurrences.set(matched, idx + 1);
+      const entry = list[idx % list.length]!;
+      return entry.original;
     });
   }
 
@@ -80,6 +94,9 @@ export class Vault {
    */
   public restoreEntry(entry: VaultEntry): void {
     this.placeholderToEntry.set(entry.placeholder, entry);
+    const existingList = this.placeholderToEntries.get(entry.placeholder) ?? [];
+    existingList.push(entry);
+    this.placeholderToEntries.set(entry.placeholder, existingList);
     this.originalToPlaceholder.set(entry.original, entry.placeholder);
 
     // Synchronize counter to prevent future collision
@@ -126,14 +143,18 @@ export class Vault {
    * Returns list of all entries currently in the vault.
    */
   public entries(): VaultEntry[] {
-    return Array.from(this.placeholderToEntry.values());
+    const all: VaultEntry[] = [];
+    for (const list of this.placeholderToEntries.values()) {
+      all.push(...list);
+    }
+    return all;
   }
 
   /**
    * Number of unique secrets stored.
    */
   public get size(): number {
-    return this.placeholderToEntry.size;
+    return this.placeholderToEntries.size;
   }
 
   /**
@@ -141,6 +162,7 @@ export class Vault {
    */
   public clear(): void {
     this.placeholderToEntry.clear();
+    this.placeholderToEntries.clear();
     this.originalToPlaceholder.clear();
     this.counters.clear();
   }

@@ -12,6 +12,7 @@ export interface RedactStreamOptions extends RedactOptions {
   onLineRedacted?: (result: RedactResult) => void;
 }
 
+const PEM_BEGIN_PATTERN = /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/;
 const PEM_END_PATTERN = /-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:\r?\n)?/;
 
 /**
@@ -57,14 +58,14 @@ export class RedactTransformStream extends Transform {
       pemEndMatch = this.buffer.match(PEM_END_PATTERN);
     }
 
-    // If buffer contains an incomplete PEM block, hold it until completed (up to 64KB)
-    if (
-      this.buffer.includes('-----BEGIN') &&
-      !this.buffer.includes('-----END') &&
-      this.buffer.length < 65536
-    ) {
-      callback();
-      return;
+    // If buffer contains an incomplete private key PEM block, hold it until completed (up to 64KB)
+    const lastBegin = this.buffer.search(PEM_BEGIN_PATTERN);
+    if (lastBegin !== -1) {
+      const remaining = this.buffer.slice(lastBegin);
+      if (!PEM_END_PATTERN.test(remaining) && this.buffer.length < 65536) {
+        callback();
+        return;
+      }
     }
 
     const lines = this.buffer.split('\n');

@@ -177,6 +177,10 @@ declare const databaseUrlPattern: RedactPattern;
  */
 declare const databaseUriPattern: RedactPattern;
 /**
+ * HTTP Basic Authentication URL (e.g. https://user:pass@host/path)
+ */
+declare const basicAuthUrlPattern: RedactPattern;
+/**
  * Hugging Face Token
  */
 declare const huggingFaceTokenPattern: RedactPattern;
@@ -247,4 +251,4 @@ declare const DEFAULT_PATTERNS: RedactPattern[];
  */
 declare const PATTERN_MAP: ReadonlyMap<string, RedactPattern>;
 
-export { privateKeyPattern as A, sendgridApiKeyPattern as B, CREDENTIAL_PATTERNS as C, DEFAULT_PATTERNS as D, type EntropyConfig as E, slackTokenPattern as F, ssnPattern as G, stripeKeyPattern as H, supabaseKeyPattern as I, twilioAccountSidPattern as J, PATTERN_MAP as P, type RedactPattern as R, type SecretCategory as S, type VaultEntry as V, type RedactOptions as a, type RedactResult as b, type Severity as c, PII_PATTERNS as d, type RedactMatch as e, anthropicApiKeyPattern as f, awsAccessKeyPattern as g, awsSecretKeyPattern as h, calculateShannonEntropy as i, createHighEntropyPattern as j, creditCardPattern as k, databaseUriPattern as l, databaseUrlPattern as m, discordTokenPattern as n, emailPattern as o, githubTokenPattern as p, gitlabTokenPattern as q, googleApiKeyPattern as r, huggingFaceTokenPattern as s, ipv4Pattern as t, ipv6Pattern as u, isHighEntropyToken as v, jwtTokenPattern as w, npmTokenPattern as x, openaiApiKeyPattern as y, phonePattern as z };
+export { phonePattern as A, privateKeyPattern as B, CREDENTIAL_PATTERNS as C, DEFAULT_PATTERNS as D, type EntropyConfig as E, sendgridApiKeyPattern as F, slackTokenPattern as G, ssnPattern as H, stripeKeyPattern as I, supabaseKeyPattern as J, twilioAccountSidPattern as K, PATTERN_MAP as P, type RedactPattern as R, type SecretCategory as S, type VaultEntry as V, type RedactOptions as a, type RedactResult as b, type Severity as c, PII_PATTERNS as d, type RedactMatch as e, anthropicApiKeyPattern as f, awsAccessKeyPattern as g, awsSecretKeyPattern as h, basicAuthUrlPattern as i, calculateShannonEntropy as j, createHighEntropyPattern as k, creditCardPattern as l, databaseUriPattern as m, databaseUrlPattern as n, discordTokenPattern as o, emailPattern as p, githubTokenPattern as q, gitlabTokenPattern as r, googleApiKeyPattern as s, huggingFaceTokenPattern as t, ipv4Pattern as u, ipv6Pattern as v, isHighEntropyToken as w, jwtTokenPattern as x, npmTokenPattern as y, openaiApiKeyPattern as z };

@@ -104,6 +104,15 @@ var databaseUrlPattern = {
   description: "Database connection URL containing user and password credentials"
 };
 var databaseUriPattern = databaseUrlPattern;
+var basicAuthUrlPattern = {
+  id: "basic-auth-url",
+  name: "HTTP Basic Auth URL",
+  category: "credential",
+  severity: "critical",
+  regex: /\bhttps?:\/\/[^\s:]+:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+  placeholder: "BASIC_AUTH_URL",
+  description: "HTTP/HTTPS URL containing username and password credentials"
+};
 var huggingFaceTokenPattern = {
   id: "huggingface-token",
   name: "Hugging Face Token",
@@ -179,6 +188,7 @@ var CREDENTIAL_PATTERNS = [
   googleApiKeyPattern,
   slackTokenPattern,
   databaseUrlPattern,
+  basicAuthUrlPattern,
   huggingFaceTokenPattern,
   gitlabTokenPattern,
   discordTokenPattern,
@@ -247,7 +257,7 @@ var ipv6Pattern = {
   name: "IPv6 Address",
   category: "network",
   severity: "low",
-  regex: /\b(?:(?:[0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|fe80::[0-9a-fA-F:]+|::1)\b/g,
+  regex: /(?<![a-zA-Z0-9_:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|::1)(?![a-zA-Z0-9_:])/gi,
   placeholder: "IPV6_ADDRESS",
   description: "Standard or compressed 128-bit IPv6 address"
 };
@@ -256,7 +266,7 @@ var phonePattern = {
   name: "Phone Number",
   category: "pii",
   severity: "medium",
-  regex: /(?:(?<![\w$])\+\d{1,3}[-.\s]?(?:\(?\d{1,4}\)?[-.\s]?)?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b|(?:\(\d{3}\)|\b\d{3})[-.\s]\d{3}[-.\s]\d{4}\b)/g,
+  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b)/g,
   placeholder: "PHONE_NUMBER",
   description: "Telephone number in formatted local or international E.164 format"
 };
@@ -333,6 +343,7 @@ function createHighEntropyPattern(config = {}) {
 // src/core/vault.ts
 var Vault = class _Vault {
   placeholderToEntry = /* @__PURE__ */ new Map();
+  placeholderToEntries = /* @__PURE__ */ new Map();
   originalToPlaceholder = /* @__PURE__ */ new Map();
   counters = /* @__PURE__ */ new Map();
   /**
@@ -361,6 +372,7 @@ var Vault = class _Vault {
       timestamp: Date.now()
     };
     this.placeholderToEntry.set(placeholder, entry);
+    this.placeholderToEntries.set(placeholder, [entry]);
     this.originalToPlaceholder.set(original, placeholder);
     return placeholder;
   }
@@ -372,20 +384,31 @@ var Vault = class _Vault {
   }
   /**
    * Replaces all placeholders in a string back with their original secrets
-   * in a deterministic, collision-free single regex pass.
+   * in a deterministic, collision-free single regex pass. Handles multiple
+   * secrets mapped to identical custom placeholders sequentially.
    */
   unmask(text) {
-    if (this.placeholderToEntry.size === 0 || !text) {
+    if (this.placeholderToEntries.size === 0 || !text) {
       return text;
     }
-    const placeholders = Array.from(this.placeholderToEntry.keys()).sort(
+    const placeholders = Array.from(this.placeholderToEntries.keys()).sort(
       (a, b) => b.length - a.length
     );
     const escaped = placeholders.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
     const regex = new RegExp(escaped.join("|"), "g");
+    const occurrences = /* @__PURE__ */ new Map();
     return text.replace(regex, (matched) => {
-      const entry = this.placeholderToEntry.get(matched);
-      return entry ? entry.original : matched;
+      const list = this.placeholderToEntries.get(matched);
+      if (!list || list.length === 0) {
+        return matched;
+      }
+      if (list.length === 1) {
+        return list[0].original;
+      }
+      const idx = occurrences.get(matched) ?? 0;
+      occurrences.set(matched, idx + 1);
+      const entry = list[idx % list.length];
+      return entry.original;
     });
   }
   /**
@@ -393,6 +416,9 @@ var Vault = class _Vault {
    */
   restoreEntry(entry) {
     this.placeholderToEntry.set(entry.placeholder, entry);
+    const existingList = this.placeholderToEntries.get(entry.placeholder) ?? [];
+    existingList.push(entry);
+    this.placeholderToEntries.set(entry.placeholder, existingList);
     this.originalToPlaceholder.set(entry.original, entry.placeholder);
     const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
     if (match && match[1] && match[2]) {
@@ -433,19 +459,24 @@ var Vault = class _Vault {
    * Returns list of all entries currently in the vault.
    */
   entries() {
-    return Array.from(this.placeholderToEntry.values());
+    const all = [];
+    for (const list of this.placeholderToEntries.values()) {
+      all.push(...list);
+    }
+    return all;
   }
   /**
    * Number of unique secrets stored.
    */
   get size() {
-    return this.placeholderToEntry.size;
+    return this.placeholderToEntries.size;
   }
   /**
    * Wipes all secrets from memory.
    */
   clear() {
     this.placeholderToEntry.clear();
+    this.placeholderToEntries.clear();
     this.originalToPlaceholder.clear();
     this.counters.clear();
   }
@@ -493,6 +524,10 @@ var RedactEngine = class {
       const regex = new RegExp(pattern.regex.source, flags);
       let match;
       while ((match = regex.exec(text)) !== null) {
+        if (match[0].length === 0) {
+          regex.lastIndex++;
+          continue;
+        }
         let secret;
         let startIndex;
         let endIndex;
@@ -606,9 +641,16 @@ var RedactEngine = class {
       hasLeaks: matches.length > 0,
       totalLeaks: matches.length,
       stats,
-      durationMs,
-      vault
+      durationMs
     };
+    if (vault) {
+      Object.defineProperty(resultObj, "vault", {
+        value: vault,
+        enumerable: false,
+        writable: true,
+        configurable: true
+      });
+    }
     Object.defineProperty(resultObj, "toJSON", {
       value: function() {
         return {
@@ -640,6 +682,7 @@ function redact(text, options) {
 function unmask(text, vault) {
   return defaultEngine.unmask(text, vault);
 }
+var PEM_BEGIN_PATTERN = /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/;
 var PEM_END_PATTERN = /-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:\r?\n)?/;
 var RedactTransformStream = class extends Transform {
   buffer = "";
@@ -669,9 +712,13 @@ var RedactTransformStream = class extends Transform {
       this.push(res.text);
       pemEndMatch = this.buffer.match(PEM_END_PATTERN);
     }
-    if (this.buffer.includes("-----BEGIN") && !this.buffer.includes("-----END") && this.buffer.length < 65536) {
-      callback();
-      return;
+    const lastBegin = this.buffer.search(PEM_BEGIN_PATTERN);
+    if (lastBegin !== -1) {
+      const remaining = this.buffer.slice(lastBegin);
+      if (!PEM_END_PATTERN.test(remaining) && this.buffer.length < 65536) {
+        callback();
+        return;
+      }
     }
     const lines = this.buffer.split("\n");
     this.buffer = lines.pop() ?? "";
@@ -846,6 +893,6 @@ function createExpressMiddleware(options = {}) {
   };
 }
 
-export { CREDENTIAL_PATTERNS, DEFAULT_PATTERNS, PATTERN_MAP, PII_PATTERNS, RedactEngine, RedactTransformStream, Vault, anthropicApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, calculateShannonEntropy, createExpressMiddleware, createHighEntropyPattern, createRedactStream, creditCardPattern, databaseUriPattern, databaseUrlPattern, discordTokenPattern, emailPattern, githubTokenPattern, gitlabTokenPattern, googleApiKeyPattern, huggingFaceTokenPattern, ipv4Pattern, ipv6Pattern, isHighEntropyToken, jwtTokenPattern, loadConfig, npmTokenPattern, openaiApiKeyPattern, parseRegexString, phonePattern, privateKeyPattern, redact, resolveCustomPattern, sendgridApiKeyPattern, slackTokenPattern, ssnPattern, stripeKeyPattern, supabaseKeyPattern, twilioAccountSidPattern, unmask, wrapAgent };
+export { CREDENTIAL_PATTERNS, DEFAULT_PATTERNS, PATTERN_MAP, PII_PATTERNS, RedactEngine, RedactTransformStream, Vault, anthropicApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, basicAuthUrlPattern, calculateShannonEntropy, createExpressMiddleware, createHighEntropyPattern, createRedactStream, creditCardPattern, databaseUriPattern, databaseUrlPattern, discordTokenPattern, emailPattern, githubTokenPattern, gitlabTokenPattern, googleApiKeyPattern, huggingFaceTokenPattern, ipv4Pattern, ipv6Pattern, isHighEntropyToken, jwtTokenPattern, loadConfig, npmTokenPattern, openaiApiKeyPattern, parseRegexString, phonePattern, privateKeyPattern, redact, resolveCustomPattern, sendgridApiKeyPattern, slackTokenPattern, ssnPattern, stripeKeyPattern, supabaseKeyPattern, twilioAccountSidPattern, unmask, wrapAgent };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

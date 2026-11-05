@@ -150,6 +150,19 @@ export const databaseUrlPattern: RedactPattern = {
 export const databaseUriPattern: RedactPattern = databaseUrlPattern;
 
 /**
+ * HTTP Basic Authentication URL (e.g. https://user:pass@host/path)
+ */
+export const basicAuthUrlPattern: RedactPattern = {
+  id: 'basic-auth-url',
+  name: 'HTTP Basic Auth URL',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bhttps?:\/\/[^\s:]+:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+  placeholder: 'BASIC_AUTH_URL',
+  description: 'HTTP/HTTPS URL containing username and password credentials'
+};
+
+/**
  * Hugging Face Token
  */
 export const huggingFaceTokenPattern: RedactPattern = {
@@ -255,6 +268,7 @@ export const CREDENTIAL_PATTERNS: RedactPattern[] = [
   googleApiKeyPattern,
   slackTokenPattern,
   databaseUrlPattern,
+  basicAuthUrlPattern,
   huggingFaceTokenPattern,
   gitlabTokenPattern,
   discordTokenPattern,

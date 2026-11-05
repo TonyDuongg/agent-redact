@@ -1,7 +1,7 @@
 - id: agent-redact
   name: agent-redact secret scanner
   description: Zero-latency secret & PII redactor to prevent leaking tokens in git commits
-  entry: npx agent-redact
+  entry: npx agent-redact --check
   language: node
   types: [text]
   stages: [pre-commit]

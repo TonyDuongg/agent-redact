@@ -6,6 +6,7 @@ var stdio_js = require('@modelcontextprotocol/sdk/server/stdio.js');
 var zod = require('zod');
 var fs = require('fs');
 var path = require('path');
+var os = require('os');
 
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -18,7 +19,7 @@ var __export = (target, all) => {
 };
 
 // src/patterns/credentials.ts
-var anthropicApiKeyPattern, openaiApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, githubTokenPattern, stripeKeyPattern, jwtTokenPattern, privateKeyPattern, googleApiKeyPattern, slackTokenPattern, databaseUrlPattern, huggingFaceTokenPattern, gitlabTokenPattern, discordTokenPattern, npmTokenPattern, sendgridApiKeyPattern, twilioAccountSidPattern, supabaseKeyPattern, CREDENTIAL_PATTERNS;
+var anthropicApiKeyPattern, openaiApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, githubTokenPattern, stripeKeyPattern, jwtTokenPattern, privateKeyPattern, googleApiKeyPattern, slackTokenPattern, databaseUrlPattern, basicAuthUrlPattern, huggingFaceTokenPattern, gitlabTokenPattern, discordTokenPattern, npmTokenPattern, sendgridApiKeyPattern, twilioAccountSidPattern, supabaseKeyPattern, CREDENTIAL_PATTERNS;
 var init_credentials = __esm({
   "src/patterns/credentials.ts"() {
     anthropicApiKeyPattern = {
@@ -120,6 +121,15 @@ var init_credentials = __esm({
       placeholder: "DATABASE_URL",
       description: "Database connection URL containing user and password credentials"
     };
+    basicAuthUrlPattern = {
+      id: "basic-auth-url",
+      name: "HTTP Basic Auth URL",
+      category: "credential",
+      severity: "critical",
+      regex: /\bhttps?:\/\/[^\s:]+:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+      placeholder: "BASIC_AUTH_URL",
+      description: "HTTP/HTTPS URL containing username and password credentials"
+    };
     huggingFaceTokenPattern = {
       id: "huggingface-token",
       name: "Hugging Face Token",
@@ -195,6 +205,7 @@ var init_credentials = __esm({
       googleApiKeyPattern,
       slackTokenPattern,
       databaseUrlPattern,
+      basicAuthUrlPattern,
       huggingFaceTokenPattern,
       gitlabTokenPattern,
       discordTokenPattern,
@@ -268,7 +279,7 @@ var init_pii = __esm({
       name: "IPv6 Address",
       category: "network",
       severity: "low",
-      regex: /\b(?:(?:[0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|fe80::[0-9a-fA-F:]+|::1)\b/g,
+      regex: /(?<![a-zA-Z0-9_:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|::1)(?![a-zA-Z0-9_:])/gi,
       placeholder: "IPV6_ADDRESS",
       description: "Standard or compressed 128-bit IPv6 address"
     };
@@ -277,7 +288,7 @@ var init_pii = __esm({
       name: "Phone Number",
       category: "pii",
       severity: "medium",
-      regex: /(?:(?<![\w$])\+\d{1,3}[-.\s]?(?:\(?\d{1,4}\)?[-.\s]?)?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b|(?:\(\d{3}\)|\b\d{3})[-.\s]\d{3}[-.\s]\d{4}\b)/g,
+      regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b)/g,
       placeholder: "PHONE_NUMBER",
       description: "Telephone number in formatted local or international E.164 format"
     };
@@ -372,6 +383,7 @@ var init_vault = __esm({
   "src/core/vault.ts"() {
     Vault = class _Vault {
       placeholderToEntry = /* @__PURE__ */ new Map();
+      placeholderToEntries = /* @__PURE__ */ new Map();
       originalToPlaceholder = /* @__PURE__ */ new Map();
       counters = /* @__PURE__ */ new Map();
       /**
@@ -400,6 +412,7 @@ var init_vault = __esm({
           timestamp: Date.now()
         };
         this.placeholderToEntry.set(placeholder, entry);
+        this.placeholderToEntries.set(placeholder, [entry]);
         this.originalToPlaceholder.set(original, placeholder);
         return placeholder;
       }
@@ -411,20 +424,31 @@ var init_vault = __esm({
       }
       /**
        * Replaces all placeholders in a string back with their original secrets
-       * in a deterministic, collision-free single regex pass.
+       * in a deterministic, collision-free single regex pass. Handles multiple
+       * secrets mapped to identical custom placeholders sequentially.
        */
       unmask(text) {
-        if (this.placeholderToEntry.size === 0 || !text) {
+        if (this.placeholderToEntries.size === 0 || !text) {
           return text;
         }
-        const placeholders = Array.from(this.placeholderToEntry.keys()).sort(
+        const placeholders = Array.from(this.placeholderToEntries.keys()).sort(
           (a, b) => b.length - a.length
         );
         const escaped = placeholders.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
         const regex = new RegExp(escaped.join("|"), "g");
+        const occurrences = /* @__PURE__ */ new Map();
         return text.replace(regex, (matched) => {
-          const entry = this.placeholderToEntry.get(matched);
-          return entry ? entry.original : matched;
+          const list = this.placeholderToEntries.get(matched);
+          if (!list || list.length === 0) {
+            return matched;
+          }
+          if (list.length === 1) {
+            return list[0].original;
+          }
+          const idx = occurrences.get(matched) ?? 0;
+          occurrences.set(matched, idx + 1);
+          const entry = list[idx % list.length];
+          return entry.original;
         });
       }
       /**
@@ -432,6 +456,9 @@ var init_vault = __esm({
        */
       restoreEntry(entry) {
         this.placeholderToEntry.set(entry.placeholder, entry);
+        const existingList = this.placeholderToEntries.get(entry.placeholder) ?? [];
+        existingList.push(entry);
+        this.placeholderToEntries.set(entry.placeholder, existingList);
         this.originalToPlaceholder.set(entry.original, entry.placeholder);
         const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
         if (match && match[1] && match[2]) {
@@ -472,19 +499,24 @@ var init_vault = __esm({
        * Returns list of all entries currently in the vault.
        */
       entries() {
-        return Array.from(this.placeholderToEntry.values());
+        const all = [];
+        for (const list of this.placeholderToEntries.values()) {
+          all.push(...list);
+        }
+        return all;
       }
       /**
        * Number of unique secrets stored.
        */
       get size() {
-        return this.placeholderToEntry.size;
+        return this.placeholderToEntries.size;
       }
       /**
        * Wipes all secrets from memory.
        */
       clear() {
         this.placeholderToEntry.clear();
+        this.placeholderToEntries.clear();
         this.originalToPlaceholder.clear();
         this.counters.clear();
       }
@@ -546,6 +578,10 @@ var init_engine = __esm({
           const regex = new RegExp(pattern.regex.source, flags);
           let match;
           while ((match = regex.exec(text)) !== null) {
+            if (match[0].length === 0) {
+              regex.lastIndex++;
+              continue;
+            }
             let secret;
             let startIndex;
             let endIndex;
@@ -659,9 +695,16 @@ var init_engine = __esm({
           hasLeaks: matches.length > 0,
           totalLeaks: matches.length,
           stats,
-          durationMs,
-          vault
+          durationMs
         };
+        if (vault) {
+          Object.defineProperty(resultObj, "vault", {
+            value: vault,
+            enumerable: false,
+            writable: true,
+            configurable: true
+          });
+        }
         Object.defineProperty(resultObj, "toJSON", {
           value: function() {
             return {
@@ -696,11 +739,23 @@ __export(server_exports, {
   createMcpServer: () => createMcpServer,
   runMcpServer: () => runMcpServer
 });
+function isPathInAllowedDirectories(targetPath) {
+  const allowedRoots = [
+    path.resolve(process.cwd()),
+    path.resolve(os.tmpdir()),
+    ...process.env.AGENT_REDACT_ALLOWED_DIR ? [path.resolve(process.env.AGENT_REDACT_ALLOWED_DIR)] : []
+  ];
+  const resolvedTarget = path.resolve(targetPath);
+  return allowedRoots.some((root) => {
+    const rel = path.relative(root, resolvedTarget);
+    return !rel.startsWith("..") && !path.isAbsolute(rel);
+  });
+}
 function createMcpServer() {
   const sessionVault = new Vault();
   const server = new mcp_js.McpServer({
     name: "agent-redact",
-    version: "0.1.0"
+    version: "0.1.2"
   });
   server.tool(
     "redact_text",
@@ -741,34 +796,55 @@ function createMcpServer() {
   );
   server.tool(
     "unmask_text",
-    "Restores masked session placeholders (e.g. [ANTHROPIC_API_KEY_1]) in agent response back to original secret values using the secure in-memory vault. If outputFilePath is specified, writes to disk directly to isolate credentials from chat context.",
+    "Restores masked session placeholders (e.g. [ANTHROPIC_API_KEY_1]) in agent response back to original secret values using the secure in-memory vault. Writes content directly to disk at outputFilePath to prevent exposing plaintext secrets in context.",
     {
       text: zod.z.string().describe("The text containing session placeholders to restore"),
-      outputFilePath: zod.z.string().optional().describe(
-        "Optional path to file where restored content should be written without leaking plaintext secrets in context"
+      outputFilePath: zod.z.string().describe(
+        "Target file path where restored content will be written. Required: plaintext secrets are never exposed in model context."
       )
     },
     async ({ text, outputFilePath }) => {
-      const restored = unmask(text, sessionVault);
-      if (outputFilePath) {
-        fs.writeFileSync(outputFilePath, restored, "utf-8");
+      if (!outputFilePath || outputFilePath.trim().length === 0) {
         return {
+          isError: true,
           content: [
             {
               type: "text",
-              text: `Successfully restored content to ${outputFilePath}. Plaintext secrets were not exposed in context.`
+              text: "Error: outputFilePath is required. For security, unmasked secrets cannot be returned to the conversation context."
             }
           ]
         };
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: restored
-          }
-        ]
-      };
+      if (!isPathInAllowedDirectories(outputFilePath)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `Security error: outputFilePath "${outputFilePath}" is outside the allowed directories (workspace or temp).`
+            }
+          ]
+        };
+      }
+      try {
+        const restored = unmask(text, sessionVault);
+        const resolvedPath = path.resolve(process.cwd(), outputFilePath);
+        fs.writeFileSync(resolvedPath, restored, { encoding: "utf-8", mode: 384 });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Successfully restored content to ${outputFilePath}. Plaintext secrets were safely written to disk and remain isolated from model context.`
+            }
+          ]
+        };
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Failed writing to ${outputFilePath}: ${errorMsg}` }]
+        };
+      }
     }
   );
   server.tool(
@@ -777,11 +853,34 @@ function createMcpServer() {
     {
       filePath: zod.z.string().describe("Relative or absolute file path to inspect"),
       reversible: zod.z.boolean().default(false).describe("Whether to generate reversible placeholders (default: false for one-way safe scan)"),
-      inPlace: zod.z.boolean().default(false).describe("If true, sanitizes the file directly in-place on disk"),
-      outputFilePath: zod.z.string().optional().describe("Optional destination path to write sanitized content")
+      inPlace: zod.z.boolean().default(false).describe("If true, sanitizes the file directly in-place on disk after creating a .bak backup"),
+      outputFilePath: zod.z.string().optional().describe("Optional destination path within workspace to write sanitized content")
     },
     async ({ filePath, reversible, inPlace, outputFilePath }) => {
-      if (!fs.existsSync(filePath)) {
+      if (!isPathInAllowedDirectories(filePath)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `Security error: filePath "${filePath}" is outside the allowed directories (workspace or temp).`
+            }
+          ]
+        };
+      }
+      if (outputFilePath && !isPathInAllowedDirectories(outputFilePath)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `Security error: outputFilePath "${outputFilePath}" is outside the allowed directories (workspace or temp).`
+            }
+          ]
+        };
+      }
+      const resolvedFile = path.resolve(process.cwd(), filePath);
+      if (!fs.existsSync(resolvedFile)) {
         return {
           isError: true,
           content: [
@@ -793,12 +892,16 @@ function createMcpServer() {
         };
       }
       try {
-        const rawContent = fs.readFileSync(filePath, "utf-8");
+        const rawContent = fs.readFileSync(resolvedFile, "utf-8");
         const result = redact(rawContent, { reversible, vault: sessionVault });
+        let backupPath = null;
         if (inPlace) {
-          fs.writeFileSync(filePath, result.text, "utf-8");
+          backupPath = `${resolvedFile}.bak`;
+          fs.writeFileSync(backupPath, rawContent, { encoding: "utf-8", mode: 384 });
+          fs.writeFileSync(resolvedFile, result.text, "utf-8");
         } else if (outputFilePath) {
-          fs.writeFileSync(outputFilePath, result.text, "utf-8");
+          const resolvedOut = path.resolve(process.cwd(), outputFilePath);
+          fs.writeFileSync(resolvedOut, result.text, "utf-8");
         }
         return {
           content: [
@@ -812,6 +915,7 @@ function createMcpServer() {
                   totalLeaks: result.totalLeaks,
                   stats: result.stats,
                   durationMs: result.durationMs,
+                  backupCreated: backupPath,
                   writtenTo: inPlace ? filePath : outputFilePath ?? null
                 },
                 null,
@@ -824,7 +928,7 @@ function createMcpServer() {
         const errorMsg = err instanceof Error ? err.message : String(err);
         return {
           isError: true,
-          content: [{ type: "text", text: `Failed reading file ${filePath}: ${errorMsg}` }]
+          content: [{ type: "text", text: `Failed reading/writing file ${filePath}: ${errorMsg}` }]
         };
       }
     }
@@ -1003,6 +1107,7 @@ ${colors.bold}OPTIONS:${colors.reset}
   -j, --json                  Output result and leak metadata as JSON
   --config <path>             Path to configuration file (.agentredactrc or json)
   --entropy                   Enable Shannon entropy detection for generic secrets
+  --check, --fail-on-leak     Exit with code 1 if any secrets are detected (CI/pre-commit)
   --vault-out <file>          Save generated session vault mappings to JSON file
   --unmask <vaultFile>        Restore previously masked file using saved vault file
   --stats                     Display leak statistics breakdown table
@@ -1022,14 +1127,14 @@ ${colors.bold}EXAMPLES:${colors.reset}
   console.log(helpText.trim());
 }
 async function readStdin() {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => {
       data += chunk;
     });
     process.stdin.on("end", () => {
-      resolve2(data);
+      resolve3(data);
     });
   });
 }
@@ -1053,6 +1158,7 @@ async function main() {
   const showStats = args.includes("--stats");
   const isInplace = args.includes("-i") || args.includes("--inplace");
   const detectEntropy = args.includes("--entropy");
+  const failOnLeak = args.includes("--check") || args.includes("--fail-on-leak");
   const outputIdx = args.findIndex((a) => a === "-o" || a === "--output");
   const outputFile = outputIdx !== -1 && args[outputIdx + 1] ? args[outputIdx + 1] : void 0;
   const vaultOutIdx = args.indexOf("--vault-out");
@@ -1111,7 +1217,7 @@ async function main() {
       }
     }
     if (vaultOutFile && vault) {
-      fs.writeFileSync(vaultOutFile, vault.toJSON(), "utf-8");
+      fs.writeFileSync(vaultOutFile, vault.toJSON(), { encoding: "utf-8", mode: 384 });
       console.error(`${colors.green}\u2714${colors.reset} Session vault saved to ${vaultOutFile}`);
     }
     if (totalLeaksAcrossFiles > 0) {
@@ -1175,7 +1281,7 @@ ${colors.green}[agent-redact] All ${fileArgs.length} files are clean.${colors.re
     entropy: loadedConfig?.entropy
   });
   if (vaultOutFile && vault) {
-    fs.writeFileSync(vaultOutFile, vault.toJSON(), "utf-8");
+    fs.writeFileSync(vaultOutFile, vault.toJSON(), { encoding: "utf-8", mode: 384 });
     console.error(`${colors.green}\u2714${colors.reset} Session vault saved to ${vaultOutFile}`);
   }
   if (isJson) {
@@ -1203,7 +1309,7 @@ ${colors.cyan}[agent-redact]${colors.reset} ${result.hasLeaks ? `${colors.yellow
       }
     }
   }
-  if (result.hasLeaks && !outputFile && !effectiveReversible && !isInplace) {
+  if (result.hasLeaks && failOnLeak) {
     process.exit(1);
   }
 }

@@ -101,6 +101,15 @@ var databaseUrlPattern = {
   description: "Database connection URL containing user and password credentials"
 };
 var databaseUriPattern = databaseUrlPattern;
+var basicAuthUrlPattern = {
+  id: "basic-auth-url",
+  name: "HTTP Basic Auth URL",
+  category: "credential",
+  severity: "critical",
+  regex: /\bhttps?:\/\/[^\s:]+:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
+  placeholder: "BASIC_AUTH_URL",
+  description: "HTTP/HTTPS URL containing username and password credentials"
+};
 var huggingFaceTokenPattern = {
   id: "huggingface-token",
   name: "Hugging Face Token",
@@ -176,6 +185,7 @@ var CREDENTIAL_PATTERNS = [
   googleApiKeyPattern,
   slackTokenPattern,
   databaseUrlPattern,
+  basicAuthUrlPattern,
   huggingFaceTokenPattern,
   gitlabTokenPattern,
   discordTokenPattern,
@@ -244,7 +254,7 @@ var ipv6Pattern = {
   name: "IPv6 Address",
   category: "network",
   severity: "low",
-  regex: /\b(?:(?:[0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|fe80::[0-9a-fA-F:]+|::1)\b/g,
+  regex: /(?<![a-zA-Z0-9_:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|(?:[0-9a-fA-F]{1,4}:){1,6}:(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}|::1)(?![a-zA-Z0-9_:])/gi,
   placeholder: "IPV6_ADDRESS",
   description: "Standard or compressed 128-bit IPv6 address"
 };
@@ -253,7 +263,7 @@ var phonePattern = {
   name: "Phone Number",
   category: "pii",
   severity: "medium",
-  regex: /(?:(?<![\w$])\+\d{1,3}[-.\s]?(?:\(?\d{1,4}\)?[-.\s]?)?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b|(?:\(\d{3}\)|\b\d{3})[-.\s]\d{3}[-.\s]\d{4}\b)/g,
+  regex: /(?:(?<![\w$])\+(?:[0-9]{1,4}[-.\s](?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|[0-9]{7,15})\b|(?:\([0-9]{3}\)|\b[0-9]{3})[-.\s][0-9]{3}[-.\s][0-9]{4}\b)/g,
   placeholder: "PHONE_NUMBER",
   description: "Telephone number in formatted local or international E.164 format"
 };
@@ -284,6 +294,7 @@ exports.PII_PATTERNS = PII_PATTERNS;
 exports.anthropicApiKeyPattern = anthropicApiKeyPattern;
 exports.awsAccessKeyPattern = awsAccessKeyPattern;
 exports.awsSecretKeyPattern = awsSecretKeyPattern;
+exports.basicAuthUrlPattern = basicAuthUrlPattern;
 exports.creditCardPattern = creditCardPattern;
 exports.databaseUriPattern = databaseUriPattern;
 exports.databaseUrlPattern = databaseUrlPattern;

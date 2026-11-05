@@ -74,6 +74,12 @@ export class RedactEngine {
 
       let match: RegExpExecArray | null;
       while ((match = regex.exec(text)) !== null) {
+        // Prevent infinite loops on zero-length regex matches (e.g. (?=a))
+        if (match[0].length === 0) {
+          regex.lastIndex++;
+          continue;
+        }
+
         let secret: string;
         let startIndex: number;
         let endIndex: number;
@@ -221,9 +227,18 @@ export class RedactEngine {
       hasLeaks: matches.length > 0,
       totalLeaks: matches.length,
       stats,
-      durationMs,
-      vault
+      durationMs
     };
+
+    // Keep vault non-enumerable so { ...result } and JSON.stringify never leak raw secrets
+    if (vault) {
+      Object.defineProperty(resultObj, 'vault', {
+        value: vault,
+        enumerable: false,
+        writable: true,
+        configurable: true
+      });
+    }
 
     // Ensure JSON.stringify(result) never leaks vault or raw secret keys
     Object.defineProperty(resultObj, 'toJSON', {

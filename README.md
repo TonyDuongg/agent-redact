@@ -242,12 +242,25 @@ Add `agent-redact` to `claude_desktop_config.json`:
 * **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 * **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
+**macOS / Linux:**
 ```json
 {
   "mcpServers": {
     "agent-redact": {
       "command": "npx",
-      "args": ["-y", "agent-redact", "mcp"]
+      "args": ["-y", "agent-redact-mcp"]
+    }
+  }
+}
+```
+
+**Windows:**
+```json
+{
+  "mcpServers": {
+    "agent-redact": {
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "agent-redact-mcp"]
     }
   }
 }
@@ -256,7 +269,7 @@ Add `agent-redact` to `claude_desktop_config.json`:
 #### B. Claude Code CLI
 Add the server with one command in your terminal:
 ```bash
-claude mcp add agent-redact -- npx -y agent-redact mcp
+claude mcp add agent-redact -- npx -y agent-redact-mcp
 ```
 
 #### C. Cursor IDE
@@ -317,16 +330,19 @@ For Python, Go, Rust, or any non-Node environment, `agent-redact` integrates sea
 
 ```python
 import subprocess
-import json
+import sys
 
 def sanitize_prompt_for_agent(raw_prompt: str) -> str:
     """Pipes sensitive prompts through agent-redact before sending to any LLM."""
+    cmd = ["npx.cmd" if sys.platform == "win32" else "npx", "-y", "agent-redact", "-r"]
     proc = subprocess.run(
-        ["npx", "-y", "agent-redact", "-r"],
+        cmd,
         input=raw_prompt,
         text=True,
+        encoding="utf-8",
         capture_output=True,
-        check=True
+        check=True,
+        shell=(sys.platform == "win32")
     )
     return proc.stdout
 
@@ -388,7 +404,7 @@ Prevent accidental credential commits locally using [pre-commit](https://pre-com
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/TonyDuongg/agent-redact
-    rev: v0.1.0
+    rev: v0.1.2
     hooks:
       - id: agent-redact
 ```
@@ -466,9 +482,10 @@ npm run bench
   * Official GitHub Action (`action.yml`) with in-PR file & line annotations.
   * Markdown Step Summary table in GitHub Actions runner.
   * `.pre-commit-hooks.yaml` for pre-commit git hooks.
-* [ ] **v1.6 (NPM Public Distribution)**:
+* [x] **v1.6 (NPM Public Distribution & Multi-OS CI)**:
   * Official public publishing to npm registry (`npm install agent-redact`).
-  * GitHub Release tag `v0.1.0` with verified provenance.
+  * Cross-platform support (Ubuntu, Windows, macOS) across Node.js 20, 22, and 24.
+  * GitHub Release with automated verification and security audit conformance.
 
 ---
 

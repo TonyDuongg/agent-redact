@@ -263,4 +263,114 @@ describe('Security Audit Fixes & Verification', () => {
       expect(req.redact.totalLeaks).toBe(3);
     });
   });
+
+  describe('8. Second-Stage Security Audit Fixes (probe2)', () => {
+    it('should avoid IPv6 false positives on timestamps, JS code, and MAC addresses while matching ::1', () => {
+      const logSample = '2026-11-05 10:45:30 INFO started at 12:30';
+      const jsSample = 'const o = {a:1, b:2}; x ? a:b; obj = {dead:beef}';
+      const macSample = 'mac aa:bb:cc:dd:ee:ff';
+      const loopbackSample = 'listen on ::1 port 80';
+
+      expect(redact(logSample).text).toBe(logSample);
+      expect(redact(jsSample).text).toBe(jsSample);
+      expect(redact(macSample).text).toBe(macSample);
+      expect(redact(loopbackSample).text).toBe('listen on [REDACTED_IPV6_ADDRESS] port 80');
+    });
+
+    it('should avoid phone number false positive on math/operator expressions like n = n +1000;', () => {
+      const mathCode = 'n = n +1000; offset = +100;';
+      expect(redact(mathCode).text).toBe(mathCode);
+    });
+
+    it('should detect and redact HTTP basic-auth URLs', () => {
+      const url = 'https://admin:hunter2pass@internal.example.com/api';
+      const res = redact(url);
+      expect(res.hasLeaks).toBe(true);
+      expect(res.text).toBe('[REDACTED_BASIC_AUTH_URL]');
+      expect(res.text).not.toContain('hunter2pass');
+    });
+
+    it('should not leak vault or secrets when result is spread via { ...result } and JSON serialized', () => {
+      const key = sampleKey('AKIA', 'IOSFODNN7EXAMPLE');
+      const res = redact(`key ${key}`, { reversible: true });
+      const spread = { ...res };
+      const serialized = JSON.stringify(spread);
+      expect(serialized).not.toContain(key);
+      expect(spread.vault).toBeUndefined();
+    });
+
+    it('should sequentially unmask multiple secrets mapped to the same placeholder via customFormatter', () => {
+      const key1 = sampleKey('AKIA', 'IOSFODNN7EXAMPLE');
+      const key2 = 'ghp_' + 'a'.repeat(36);
+      const text = `${key1} and ${key2}`;
+      const res = redact(text, { reversible: true, customFormatter: () => '[X]' });
+      expect(res.text).toBe('[X] and [X]');
+      expect(res.vault!.unmask(res.text)).toBe(text);
+    });
+
+    it('should redact split private keys in stream even when preceded by a certificate block', async () => {
+      const stream = createRedactStream();
+      let output = '';
+      stream.on('data', (d) => (output += d));
+
+      await new Promise<void>((res) => {
+        stream.on('end', res);
+        stream.write(
+          '-----BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----\nKEYBODY_PART1\n'
+        );
+        stream.write('KEYBODY_PART2\n-----END PRIVATE KEY-----\n');
+        stream.end();
+      });
+
+      expect(output).toContain('-----BEGIN CERTIFICATE-----');
+      expect(output).toContain('[REDACTED_PRIVATE_KEY]');
+      expect(output).not.toContain('KEYBODY_PART1');
+    });
+
+    it('should not enter an infinite loop when custom regex matches empty string / zero width', () => {
+      const res = redact('banana', {
+        customPatterns: [
+          {
+            id: 'zero-width',
+            name: 'Zero Width',
+            category: 'custom',
+            severity: 'low',
+            regex: /(?=a)/g,
+            placeholder: 'ZW'
+          }
+        ]
+      });
+      expect(res.text).toBe('banana');
+    });
+
+    it('should create a .bak backup file when scan_file is called with inPlace: true in MCP', async () => {
+      const { createMcpServer } = await import('../src/mcp/server.js');
+      const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+
+      const server = createMcpServer();
+      const [cTransport, sTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: 'test', version: '1.0' }, { capabilities: {} });
+      await Promise.all([client.connect(cTransport), server.connect(sTransport)]);
+
+      const testFile = join(tmpdir(), `mcp-backup-test-${Date.now()}.env`);
+      const key = sampleKey('AKIA', 'IOSFODNN7EXAMPLE');
+      writeFileSync(testFile, `AWS_KEY=${key}`, 'utf-8');
+
+      const res = await client.callTool({
+        name: 'scan_file',
+        arguments: { filePath: testFile, inPlace: true }
+      });
+
+      const parsed = JSON.parse((res.content as Array<{ text: string }>)[0]!.text);
+      expect(parsed.backupCreated).toBe(`${testFile}.bak`);
+      expect(existsSync(`${testFile}.bak`)).toBe(true);
+      expect(readFileSync(`${testFile}.bak`, 'utf-8')).toBe(`AWS_KEY=${key}`);
+      expect(readFileSync(testFile, 'utf-8')).toContain('[REDACTED_AWS_ACCESS_KEY_ID]');
+
+      unlinkSync(testFile);
+      unlinkSync(`${testFile}.bak`);
+      await client.close();
+    });
+  });
 });
