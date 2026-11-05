@@ -226,6 +226,25 @@ describe('Audit round 3: remaining findings', () => {
       await client.close();
     });
 
+    it.runIf(process.platform === 'win32')(
+      'refuses writes into .git through its 8.3 short name (GIT~1)',
+      async () => {
+        const repo = makeTmpDir('ar-git83-');
+        mkdirSync(join(repo, '.git', 'hooks'), { recursive: true });
+        const shortDir = join(repo, 'GIT~1');
+        if (!existsSync(shortDir)) return; // 8.3 name generation disabled on this volume
+
+        const client = await connectClient([repo]);
+        const res = await client.callTool({
+          name: 'unmask_text',
+          arguments: { text: 'x', outputFilePath: join(shortDir, 'hooks', 'pre-commit') }
+        });
+        expect(res.isError).toBe(true);
+        expect(existsSync(join(repo, '.git', 'hooks', 'pre-commit'))).toBe(false);
+        await client.close();
+      }
+    );
+
     it('never overwrites an existing .bak backup on repeated in-place scans', async () => {
       const dir = makeTmpDir('ar-bak-');
       const file = join(dir, 'victim.env');
