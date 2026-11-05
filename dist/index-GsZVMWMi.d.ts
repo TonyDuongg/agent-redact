@@ -177,7 +177,7 @@ declare const databaseUrlPattern: RedactPattern;
  */
 declare const databaseUriPattern: RedactPattern;
 /**
- * HTTP Basic Authentication URL (e.g. https://user:pass@host/path)
+ * HTTP Basic Authentication URL containing user and password credentials
  */
 declare const basicAuthUrlPattern: RedactPattern;
 /**

@@ -150,7 +150,7 @@ export const databaseUrlPattern: RedactPattern = {
 export const databaseUriPattern: RedactPattern = databaseUrlPattern;
 
 /**
- * HTTP Basic Authentication URL (e.g. https://user:pass@host/path)
+ * HTTP Basic Authentication URL containing user and password credentials
  */
 export const basicAuthUrlPattern: RedactPattern = {
   id: 'basic-auth-url',
