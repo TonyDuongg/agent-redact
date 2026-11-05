@@ -49,6 +49,7 @@ export const awsSecretKeyPattern: RedactPattern = {
   category: 'credential',
   severity: 'critical',
   regex: /(?:aws_secret_access_key|aws_secret_key|secret_access_key)[\s=:'"]+([A-Za-z0-9\/+=]{40})(?:\s|$|['",;])/gi,
+  secretGroup: 1,
   placeholder: 'AWS_SECRET_ACCESS_KEY',
   description: 'Amazon Web Services 40-character Secret Access Key'
 };
@@ -74,7 +75,9 @@ export const stripeKeyPattern: RedactPattern = {
   name: 'Stripe API Key',
   category: 'credential',
   severity: 'critical',
-  regex: /\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,99}\b/g,
+  // Unbounded: Stripe documents that key length may grow, and a bounded
+  // quantifier followed by \b silently skips longer keys entirely.
+  regex: /\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,}\b/g,
   placeholder: 'STRIPE_API_KEY',
   description: 'Stripe API key (live or test, secret or publishable)'
 };
@@ -126,7 +129,8 @@ export const slackTokenPattern: RedactPattern = {
   name: 'Slack Token',
   category: 'credential',
   severity: 'high',
-  regex: /\b(?:xoxb|xoxp|xoxr|xoxa)-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b|\bxapp-[0-9]{1,}-[a-zA-Z0-9]{10,32}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b/g,
+  // Bot tokens have two numeric segments, user/refresh tokens have three
+  regex: /\b(?:xoxb|xoxp|xoxr|xoxa|xoxe|xoxs)-[0-9]{10,13}(?:-[0-9]{10,13}){1,2}-[a-zA-Z0-9]{24,34}\b|\bxapp-[0-9]{1,}-[a-zA-Z0-9]{10,32}-[0-9]{10,13}-[a-zA-Z0-9]{24,64}\b/g,
   placeholder: 'SLACK_TOKEN',
   description: 'Slack Bot, User, or App token'
 };

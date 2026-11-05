@@ -51,6 +51,7 @@ var awsSecretKeyPattern = {
   category: "credential",
   severity: "critical",
   regex: /(?:aws_secret_access_key|aws_secret_key|secret_access_key)[\s=:'"]+([A-Za-z0-9\/+=]{40})(?:\s|$|['",;])/gi,
+  secretGroup: 1,
   placeholder: "AWS_SECRET_ACCESS_KEY",
   description: "Amazon Web Services 40-character Secret Access Key"
 };
@@ -68,7 +69,9 @@ var stripeKeyPattern = {
   name: "Stripe API Key",
   category: "credential",
   severity: "critical",
-  regex: /\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,99}\b/g,
+  // Unbounded: Stripe documents that key length may grow, and a bounded
+  // quantifier followed by \b silently skips longer keys entirely.
+  regex: /\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,}\b/g,
   placeholder: "STRIPE_API_KEY",
   description: "Stripe API key (live or test, secret or publishable)"
 };
@@ -104,7 +107,8 @@ var slackTokenPattern = {
   name: "Slack Token",
   category: "credential",
   severity: "high",
-  regex: /\b(?:xoxb|xoxp|xoxr|xoxa)-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b|\bxapp-[0-9]{1,}-[a-zA-Z0-9]{10,32}-[0-9]{10,13}-[a-zA-Z0-9]{24,32}\b/g,
+  // Bot tokens have two numeric segments, user/refresh tokens have three
+  regex: /\b(?:xoxb|xoxp|xoxr|xoxa|xoxe|xoxs)-[0-9]{10,13}(?:-[0-9]{10,13}){1,2}-[a-zA-Z0-9]{24,34}\b|\bxapp-[0-9]{1,}-[a-zA-Z0-9]{10,32}-[0-9]{10,13}-[a-zA-Z0-9]{24,64}\b/g,
   placeholder: "SLACK_TOKEN",
   description: "Slack Bot, User, or App token"
 };
@@ -314,6 +318,8 @@ new Map([
 ]);
 
 // src/core/entropy.ts
+var DEFAULT_ENTROPY_MIN_LENGTH = 20;
+var DEFAULT_ENTROPY_MAX_LENGTH = 120;
 function calculateShannonEntropy(str) {
   if (!str || str.length === 0) {
     return 0;
@@ -332,8 +338,8 @@ function calculateShannonEntropy(str) {
   return Math.round(entropy * 1e3) / 1e3;
 }
 function isHighEntropyToken(token, config = {}) {
-  const minLength = config.minLength ?? 20;
-  const maxLength = config.maxLength ?? 120;
+  const minLength = config.minLength ?? DEFAULT_ENTROPY_MIN_LENGTH;
+  const maxLength = config.maxLength ?? DEFAULT_ENTROPY_MAX_LENGTH;
   const base64Threshold = config.base64Threshold ?? 4.3;
   const hexThreshold = config.hexThreshold ?? 3.2;
   if (token.length < minLength || token.length > maxLength) {
@@ -347,17 +353,17 @@ function isHighEntropyToken(token, config = {}) {
   return entropy >= base64Threshold;
 }
 function createHighEntropyPattern(config = {}) {
-  const min = config.minLength ?? 16;
-  const max = config.maxLength ?? 120;
+  const min = config.minLength ?? DEFAULT_ENTROPY_MIN_LENGTH;
   return {
     id: "generic-high-entropy-secret",
     name: "Generic High-Entropy Secret",
     category: "credential",
     severity: "high",
     regex: new RegExp(
-      `(?:api[_-]?key|secret|token|password|auth[_-]?key|access[_-]?key)[\\s=:'"]+([^\\s"';,\\n]{${min},${max}})`,
+      `(?:api[_-]?key|secret|token|password|auth[_-]?key|access[_-]?key)[\\s=:'"]+([^\\s"';,\\n]{${min},})`,
       "gi"
     ),
+    secretGroup: 1,
     placeholder: "GENERIC_SECRET",
     description: "High-entropy random token detected in sensitive assignment context"
   };
@@ -475,9 +481,18 @@ var Vault = class _Vault {
   static fromJSON(data) {
     const vault = new _Vault();
     const list = typeof data === "string" ? JSON.parse(data) : data;
-    if (Array.isArray(list)) {
-      vault.restoreEntries(list);
+    if (!Array.isArray(list)) {
+      throw new Error("Invalid vault: expected a JSON array of entries");
     }
+    list.forEach((entry, i) => {
+      const e = entry;
+      if (!e || typeof e !== "object" || typeof e.placeholder !== "string" || e.placeholder.length === 0 || typeof e.original !== "string" || e.original.length === 0) {
+        throw new Error(
+          `Invalid vault: entry ${i} must have non-empty string "placeholder" and "original" fields`
+        );
+      }
+    });
+    vault.restoreEntries(list);
     return vault;
   }
   /**
@@ -514,6 +529,20 @@ var SEVERITY_WEIGHT = {
   medium: 2,
   low: 1
 };
+function selectSecretSpan(match, pattern) {
+  let group = pattern.secretGroup;
+  if (group === void 0 && match.groups?.["secret"] !== void 0) {
+    group = "secret";
+  }
+  if (group !== void 0) {
+    const value = typeof group === "number" ? match[group] : match.groups?.[group];
+    const span = typeof group === "number" ? match.indices?.[group] : match.indices?.groups?.[group];
+    if (value && span) {
+      return { secret: value, startIndex: span[0], endIndex: span[1] };
+    }
+  }
+  return { secret: match[0], startIndex: match.index, endIndex: match.index + match[0].length };
+}
 var RedactEngine = class {
   patterns;
   vault;
@@ -553,33 +582,20 @@ var RedactEngine = class {
           regex.lastIndex++;
           continue;
         }
-        let secret;
-        let startIndex;
-        let endIndex;
-        if (match[1] !== void 0 && match[1].length > 0) {
-          secret = match[1];
-          const indices = match.indices;
-          if (indices && indices[1]) {
-            startIndex = indices[1][0];
-            endIndex = indices[1][1];
-          } else {
-            const offsetInMatch = match[0].indexOf(secret);
-            startIndex = match.index + offsetInMatch;
-            endIndex = startIndex + secret.length;
-          }
-        } else {
-          secret = match[0];
-          startIndex = match.index;
-          endIndex = startIndex + secret.length;
-        }
+        const { secret, startIndex, endIndex } = selectSecretSpan(match, pattern);
         if (allowlist.length > 0 && allowlist.some((al) => typeof al === "string" && al.length > 0 && secret === al)) {
           continue;
         }
         if (pattern.validator && !pattern.validator(secret)) {
           continue;
         }
-        if (pattern.id === "generic-high-entropy-secret" && !isHighEntropyToken(secret, options?.entropy)) {
-          continue;
+        if (pattern.id === "generic-high-entropy-secret") {
+          const entropyConfig = options?.entropy;
+          const maxLength = entropyConfig?.maxLength ?? DEFAULT_ENTROPY_MAX_LENGTH;
+          const sample = secret.length > maxLength ? secret.slice(0, maxLength) : secret;
+          if (!isHighEntropyToken(sample, entropyConfig)) {
+            continue;
+          }
         }
         rawMatches.push({
           pattern,
@@ -758,13 +774,15 @@ function checkPath(targetPath, roots, mode) {
   return { ok: false, reason: "outside the allowed directories (workspace or temp)" };
 }
 var SAFE_WRITE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW ?? 0);
-function safeWriteFile(path, content, mode = 420) {
-  const fd = fs.openSync(path, SAFE_WRITE_FLAGS, mode);
+function safeWriteFile(path, content, enforceMode) {
+  const fd = fs.openSync(path, SAFE_WRITE_FLAGS, enforceMode ?? 420);
   try {
     fs.writeFileSync(fd, content, "utf-8");
-    try {
-      fs.fchmodSync(fd, mode);
-    } catch {
+    if (enforceMode !== void 0) {
+      try {
+        fs.fchmodSync(fd, enforceMode);
+      } catch {
+      }
     }
   } finally {
     fs.closeSync(fd);

@@ -135,10 +135,27 @@ export class Vault {
    */
   public static fromJSON(data: string | VaultEntry[]): Vault {
     const vault = new Vault();
-    const list: VaultEntry[] = typeof data === 'string' ? JSON.parse(data) : data;
-    if (Array.isArray(list)) {
-      vault.restoreEntries(list);
+    const list: unknown = typeof data === 'string' ? JSON.parse(data) : data;
+    if (!Array.isArray(list)) {
+      throw new Error('Invalid vault: expected a JSON array of entries');
     }
+    // Validate before restoring; error messages reference the index only, never the secret
+    list.forEach((entry: unknown, i: number) => {
+      const e = entry as Partial<VaultEntry> | null;
+      if (
+        !e ||
+        typeof e !== 'object' ||
+        typeof e.placeholder !== 'string' ||
+        e.placeholder.length === 0 ||
+        typeof e.original !== 'string' ||
+        e.original.length === 0
+      ) {
+        throw new Error(
+          `Invalid vault: entry ${i} must have non-empty string "placeholder" and "original" fields`
+        );
+      }
+    });
+    vault.restoreEntries(list as VaultEntry[]);
     return vault;
   }
 

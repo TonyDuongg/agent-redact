@@ -141,45 +141,64 @@ async function main(): Promise<void> {
   const effectiveReversible = isReversible || (loadedConfig?.reversible ?? false);
   const vault = effectiveReversible ? new Vault() : undefined;
 
+  // Reversible placeholders written in-place without a saved vault can never be restored:
+  // the original secrets would be destroyed. Refuse instead of silently losing data.
+  if (effectiveReversible && isInplace && !vaultOutFile && !unmaskVaultFile) {
+    console.error(
+      `${colors.red}Error:${colors.reset} reversible in-place masking requires --vault-out <file>; ` +
+        'otherwise the original values cannot be restored.'
+    );
+    process.exit(2);
+  }
+
   // Multi-file screening mode (used by pre-commit or batch audits)
   if (fileArgs.length > 1) {
     let totalLeaksAcrossFiles = 0;
 
+    // Read every input first so a missing/unreadable file aborts before anything is modified
+    const inputs: Array<{ file: string; content: string }> = [];
     for (const file of fileArgs) {
       try {
-        const fileContent = readFileSync(file, 'utf-8');
-        const res = redact(fileContent, {
-          reversible: effectiveReversible,
-          vault,
-          include: loadedConfig?.include,
-          exclude: loadedConfig?.exclude,
-          allowlist: loadedConfig?.allowlist,
-          customPatterns: loadedConfig?.customPatterns,
-          detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
-          entropy: loadedConfig?.entropy
-        });
-
-        if (isInplace) {
-          writeFileSync(file, res.text, 'utf-8');
-        }
-
-        if (res.hasLeaks) {
-          totalLeaksAcrossFiles += res.totalLeaks;
-          console.error(
-            `${colors.yellow}✖ [LEAK]${colors.reset} ${file}: ${res.totalLeaks} secret(s) detected`
-          );
-        } else {
-          console.error(`${colors.green}✔ [CLEAN]${colors.reset} ${file}`);
-        }
+        inputs.push({ file, content: readFileSync(file, 'utf-8') });
       } catch {
         console.error(`${colors.red}Error:${colors.reset} Cannot read file: ${file}`);
         process.exit(1);
       }
     }
 
+    const results = inputs.map(({ file, content: fileContent }) => ({
+      file,
+      res: redact(fileContent, {
+        reversible: effectiveReversible,
+        vault,
+        include: loadedConfig?.include,
+        exclude: loadedConfig?.exclude,
+        allowlist: loadedConfig?.allowlist,
+        customPatterns: loadedConfig?.customPatterns,
+        detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+        entropy: loadedConfig?.entropy
+      })
+    }));
+
+    // Persist the vault BEFORE rewriting inputs, so placeholders are always recoverable
     if (vaultOutFile && vault) {
       writeSecureFile(vaultOutFile, vault.toJSON());
       console.error(`${colors.green}✔${colors.reset} Session vault saved to ${vaultOutFile}`);
+    }
+
+    for (const { file, res } of results) {
+      if (isInplace && res.hasLeaks) {
+        writeFileSync(file, res.text, 'utf-8');
+      }
+
+      if (res.hasLeaks) {
+        totalLeaksAcrossFiles += res.totalLeaks;
+        console.error(
+          `${colors.yellow}✖ [LEAK]${colors.reset} ${file}: ${res.totalLeaks} secret(s) detected`
+        );
+      } else {
+        console.error(`${colors.green}✔ [CLEAN]${colors.reset} ${file}`);
+      }
     }
 
     if (totalLeaksAcrossFiles > 0 && (failOnLeak || !isInplace)) {

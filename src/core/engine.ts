@@ -1,5 +1,10 @@
 import { DEFAULT_PATTERNS } from '../patterns/index.js';
-import { createHighEntropyPattern, isHighEntropyToken, type EntropyConfig } from './entropy.js';
+import {
+  createHighEntropyPattern,
+  isHighEntropyToken,
+  DEFAULT_ENTROPY_MAX_LENGTH,
+  type EntropyConfig
+} from './entropy.js';
 import type {
   RedactMatch,
   RedactOptions,
@@ -20,6 +25,37 @@ interface RawMatch {
   secret: string;
   startIndex: number;
   endIndex: number;
+}
+
+type IndexedMatch = RegExpExecArray & {
+  indices?: Array<[number, number] | undefined> & {
+    groups?: Record<string, [number, number] | undefined>;
+  };
+};
+
+/**
+ * Picks the span to redact: the pattern's declared `secretGroup`, else a named
+ * `secret` group, else the whole match. Falling back to the whole match keeps
+ * redaction fail-closed when a group did not participate.
+ */
+function selectSecretSpan(
+  match: IndexedMatch,
+  pattern: RedactPattern
+): { secret: string; startIndex: number; endIndex: number } {
+  let group: number | string | undefined = pattern.secretGroup;
+  if (group === undefined && match.groups?.['secret'] !== undefined) {
+    group = 'secret';
+  }
+
+  if (group !== undefined) {
+    const value = typeof group === 'number' ? match[group] : match.groups?.[group];
+    const span = typeof group === 'number' ? match.indices?.[group] : match.indices?.groups?.[group];
+    if (value && span) {
+      return { secret: value, startIndex: span[0], endIndex: span[1] };
+    }
+  }
+
+  return { secret: match[0], startIndex: match.index, endIndex: match.index + match[0].length };
 }
 
 export class RedactEngine {
@@ -72,35 +108,15 @@ export class RedactEngine {
       if (!flags.includes('d')) flags += 'd';
       const regex = new RegExp(pattern.regex.source, flags);
 
-      let match: RegExpExecArray | null;
-      while ((match = regex.exec(text)) !== null) {
+      let match: IndexedMatch | null;
+      while ((match = regex.exec(text) as IndexedMatch | null) !== null) {
         // Prevent infinite loops on zero-length regex matches (e.g. (?=a))
         if (match[0].length === 0) {
           regex.lastIndex++;
           continue;
         }
 
-        let secret: string;
-        let startIndex: number;
-        let endIndex: number;
-
-        // If pattern has a capturing group (e.g., secret in key=secret assignment), target group 1
-        if (match[1] !== undefined && match[1].length > 0) {
-          secret = match[1];
-          const indices = (match as any).indices;
-          if (indices && indices[1]) {
-            startIndex = indices[1][0];
-            endIndex = indices[1][1];
-          } else {
-            const offsetInMatch = match[0].indexOf(secret);
-            startIndex = match.index + offsetInMatch;
-            endIndex = startIndex + secret.length;
-          }
-        } else {
-          secret = match[0];
-          startIndex = match.index;
-          endIndex = startIndex + secret.length;
-        }
+        const { secret, startIndex, endIndex } = selectSecretSpan(match, pattern);
 
         // Check if token matches allowlist (exact match only, ignore empty strings)
         if (
@@ -115,12 +131,16 @@ export class RedactEngine {
           continue;
         }
 
-        // If generic high entropy pattern, verify that the token actually exhibits high randomness
-        if (
-          pattern.id === 'generic-high-entropy-secret' &&
-          !isHighEntropyToken(secret, options?.entropy as EntropyConfig | undefined)
-        ) {
-          continue;
+        // If generic high entropy pattern, verify that the token actually exhibits high randomness.
+        // Tokens longer than maxLength are judged on their prefix and then redacted in full,
+        // so a long secret is never left half-visible.
+        if (pattern.id === 'generic-high-entropy-secret') {
+          const entropyConfig = options?.entropy as EntropyConfig | undefined;
+          const maxLength = entropyConfig?.maxLength ?? DEFAULT_ENTROPY_MAX_LENGTH;
+          const sample = secret.length > maxLength ? secret.slice(0, maxLength) : secret;
+          if (!isHighEntropyToken(sample, entropyConfig)) {
+            continue;
+          }
         }
 
         rawMatches.push({

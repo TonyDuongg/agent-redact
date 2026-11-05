@@ -12,6 +12,11 @@ export interface CustomPatternConfig {
   regex: string;
   placeholder: string;
   description?: string;
+  /**
+   * Capturing group (number or name) holding the secret, e.g. 2 for "(key):\s*(value)".
+   * Without it, a named group "(?<secret>...)" is used if present, otherwise the whole match.
+   */
+  secretGroup?: number | string;
 }
 
 export interface AgentRedactConfig {
@@ -19,7 +24,7 @@ export interface AgentRedactConfig {
   include?: string[];
   /** Pattern IDs to disable */
   exclude?: string[];
-  /** Exact strings or substrings to ignore (whitelist) */
+  /** Exact strings to ignore (whitelist). Substrings are NOT matched. */
   allowlist?: string[];
   /** Default to reversible session masking */
   reversible?: boolean;
@@ -57,6 +62,23 @@ export function parseRegexString(patternStr: string): RegExp {
  * Converts a raw JSON pattern configuration into a live RedactPattern
  */
 export function resolveCustomPattern(cfg: CustomPatternConfig): RedactPattern {
+  const label = typeof cfg?.id === 'string' && cfg.id ? `"${cfg.id}"` : '(missing id)';
+  for (const field of ['id', 'name', 'regex', 'placeholder'] as const) {
+    const value = cfg?.[field];
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error(`Custom pattern ${label}: "${field}" must be a non-empty string`);
+    }
+  }
+  if (
+    cfg.secretGroup !== undefined &&
+    !(
+      (typeof cfg.secretGroup === 'number' && Number.isInteger(cfg.secretGroup) && cfg.secretGroup > 0) ||
+      (typeof cfg.secretGroup === 'string' && cfg.secretGroup.length > 0)
+    )
+  ) {
+    throw new Error(`Custom pattern ${label}: "secretGroup" must be a positive integer or a group name`);
+  }
+
   return {
     id: cfg.id,
     name: cfg.name,
@@ -64,7 +86,8 @@ export function resolveCustomPattern(cfg: CustomPatternConfig): RedactPattern {
     severity: cfg.severity ?? 'high',
     regex: parseRegexString(cfg.regex),
     placeholder: cfg.placeholder,
-    description: cfg.description ?? cfg.name
+    description: cfg.description ?? cfg.name,
+    ...(cfg.secretGroup !== undefined ? { secretGroup: cfg.secretGroup } : {})
   };
 }
 

@@ -1,5 +1,5 @@
-import { R as RedactPattern, V as VaultEntry, a as RedactOptions, b as RedactResult, E as EntropyConfig, S as SecretCategory, c as Severity } from './index-GsZVMWMi.cjs';
-export { C as CREDENTIAL_PATTERNS, D as DEFAULT_PATTERNS, P as PATTERN_MAP, d as PII_PATTERNS, e as RedactMatch, f as anthropicApiKeyPattern, g as awsAccessKeyPattern, h as awsSecretKeyPattern, i as basicAuthUrlPattern, j as calculateShannonEntropy, k as createHighEntropyPattern, l as creditCardPattern, m as databaseUriPattern, n as databaseUrlPattern, o as discordTokenPattern, p as emailPattern, q as githubTokenPattern, r as gitlabTokenPattern, s as googleApiKeyPattern, t as huggingFaceTokenPattern, u as ipv4Pattern, v as ipv6Pattern, w as isHighEntropyToken, x as jwtTokenPattern, y as npmTokenPattern, z as openaiApiKeyPattern, A as phonePattern, B as privateKeyPattern, F as sendgridApiKeyPattern, G as slackTokenPattern, H as ssnPattern, I as stripeKeyPattern, J as supabaseKeyPattern, K as twilioAccountSidPattern } from './index-GsZVMWMi.cjs';
+import { R as RedactPattern, V as VaultEntry, a as RedactOptions, b as RedactResult, E as EntropyConfig, S as SecretCategory, c as Severity } from './index-BJYTRG5Q.cjs';
+export { C as CREDENTIAL_PATTERNS, D as DEFAULT_PATTERNS, P as PATTERN_MAP, d as PII_PATTERNS, e as RedactMatch, f as anthropicApiKeyPattern, g as awsAccessKeyPattern, h as awsSecretKeyPattern, i as basicAuthUrlPattern, j as calculateShannonEntropy, k as createHighEntropyPattern, l as creditCardPattern, m as databaseUriPattern, n as databaseUrlPattern, o as discordTokenPattern, p as emailPattern, q as githubTokenPattern, r as gitlabTokenPattern, s as googleApiKeyPattern, t as huggingFaceTokenPattern, u as ipv4Pattern, v as ipv6Pattern, w as isHighEntropyToken, x as jwtTokenPattern, y as npmTokenPattern, z as openaiApiKeyPattern, A as phonePattern, B as privateKeyPattern, F as sendgridApiKeyPattern, G as slackTokenPattern, H as ssnPattern, I as stripeKeyPattern, J as supabaseKeyPattern, K as twilioAccountSidPattern } from './index-BJYTRG5Q.cjs';
 import { Transform, TransformCallback } from 'node:stream';
 
 /**
@@ -97,12 +97,10 @@ interface RedactStreamOptions extends RedactOptions {
      */
     onLineRedacted?: (result: RedactResult) => void;
 }
-/**
- * Node.js Transform Stream for memory-efficient O(1) continuous
- * stream redaction of large logs or piped inputs.
- */
 declare class RedactTransformStream extends Transform {
     private buffer;
+    /** True while discarding the body of an oversized private key block that has no END yet */
+    private droppingOpenPem;
     private decoder;
     private options;
     readonly vault: Vault;
@@ -124,13 +122,18 @@ interface CustomPatternConfig {
     regex: string;
     placeholder: string;
     description?: string;
+    /**
+     * Capturing group (number or name) holding the secret, e.g. 2 for "(key):\s*(value)".
+     * Without it, a named group "(?<secret>...)" is used if present, otherwise the whole match.
+     */
+    secretGroup?: number | string;
 }
 interface AgentRedactConfig {
     /** Pattern IDs to activate */
     include?: string[];
     /** Pattern IDs to disable */
     exclude?: string[];
-    /** Exact strings or substrings to ignore (whitelist) */
+    /** Exact strings to ignore (whitelist). Substrings are NOT matched. */
     allowlist?: string[];
     /** Default to reversible session masking */
     reversible?: boolean;

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### ⚠️ Behavior change
+- **Capturing groups no longer cause partial redaction.** Previously, any regex with a capturing group redacted only group 1, so a custom pattern like `(acme|corp)_[A-Za-z0-9]{32}` left the token body visible. The whole match is now redacted unless the pattern declares `secretGroup` (number or name) or uses a named `(?<secret>...)` group. Built-in assignment patterns (AWS secret key, generic entropy) declare `secretGroup: 1` and are unchanged. Custom patterns that relied on implicit group 1 now redact more, never less.
+
+### 🔒 Leak fixes
+- **Stripe keys longer than 99 characters** were skipped entirely (bounded quantifier + `\b`); the pattern is now unbounded.
+- **Slack user/refresh tokens** (`xoxp-`/`xoxe-` with three numeric segments) were not detected.
+- **High-entropy secrets longer than `maxLength`** were cut at 120 characters, leaving the tail visible; the whole token is now redacted (entropy is judged on the first `maxLength` characters).
+- **Stream: oversized private key blocks** (>1 MB without END) leaked body lines that arrived in later chunks; the stream now keeps discarding until the END marker, including one split across chunks.
+
+### 🧯 Data-loss fixes
+- **CLI `-r -i` without `--vault-out`** destroyed the original values (placeholders could never be restored); it now exits with code 2.
+- **CLI multi-file mode** rewrote earlier files and then aborted on an unreadable file before saving the vault; all inputs are now read first and the vault is written before any file is modified. Files without leaks are no longer rewritten.
+- **MCP `scan_file({ inPlace })`** reset the sanitized file's permissions to `0644` (scripts lost their executable bit); existing permissions are now preserved. Restored-secret files from `unmask_text` are still forced to `0600`.
+
+### 🧰 Validation & tooling
+- Custom patterns missing `id`/`name`/`regex`/`placeholder` now fail with a clear error instead of producing `[REDACTED_undefined]`.
+- `Vault.fromJSON` validates entries and reports the failing index without echoing secret values.
+- GitHub Action annotations escape `%`, `,`, `:` and newlines in file paths/messages per the workflow-command spec.
+- Entropy regex and `isHighEntropyToken` share one default `minLength` (20).
+- Added `.gitattributes` (`eol=lf`) so `dist/` source maps build identically on Windows and Linux CI.
+- README: documented `AGENT_REDACT_ALLOWED_DIR`, `.bak` backups, `secretGroup`, exact-match allowlist and fail-closed PEM streaming.
+
+---
+
 ## [0.1.3] - 2026-11-05
 
 ### 🔒 Security & Sandbox Hardening

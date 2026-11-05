@@ -1,5 +1,9 @@
 import type { RedactPattern } from './types.js';
 
+/** Shared defaults so the detection regex and the entropy check agree on token length */
+export const DEFAULT_ENTROPY_MIN_LENGTH = 20;
+export const DEFAULT_ENTROPY_MAX_LENGTH = 120;
+
 export interface EntropyConfig {
   /** Minimum token length to analyze (default: 20) */
   minLength?: number;
@@ -46,8 +50,8 @@ export function isHighEntropyToken(
   token: string,
   config: EntropyConfig = {}
 ): boolean {
-  const minLength = config.minLength ?? 20;
-  const maxLength = config.maxLength ?? 120;
+  const minLength = config.minLength ?? DEFAULT_ENTROPY_MIN_LENGTH;
+  const maxLength = config.maxLength ?? DEFAULT_ENTROPY_MAX_LENGTH;
   const base64Threshold = config.base64Threshold ?? 4.3;
   const hexThreshold = config.hexThreshold ?? 3.2;
 
@@ -71,17 +75,19 @@ export function isHighEntropyToken(
  * Pattern definition to detect generic high-entropy secrets preceded by key/token/secret context
  */
 export function createHighEntropyPattern(config: EntropyConfig = {}): RedactPattern {
-  const min = config.minLength ?? 16;
-  const max = config.maxLength ?? 120;
+  // No upper bound in the regex: a bounded quantifier would cut a long secret in half and
+  // leave its tail visible. maxLength is applied to the entropy sample in the engine instead.
+  const min = config.minLength ?? DEFAULT_ENTROPY_MIN_LENGTH;
   return {
     id: 'generic-high-entropy-secret',
     name: 'Generic High-Entropy Secret',
     category: 'credential',
     severity: 'high',
     regex: new RegExp(
-      `(?:api[_-]?key|secret|token|password|auth[_-]?key|access[_-]?key)[\\s=:'"]+([^\\s"';,\\n]{${min},${max}})`,
+      `(?:api[_-]?key|secret|token|password|auth[_-]?key|access[_-]?key)[\\s=:'"]+([^\\s"';,\\n]{${min},})`,
       'gi'
     ),
+    secretGroup: 1,
     placeholder: 'GENERIC_SECRET',
     description: 'High-entropy random token detected in sensitive assignment context'
   };

@@ -90,14 +90,21 @@ function checkPath(targetPath: string, roots: string[], mode: 'read' | 'write'):
 const SAFE_WRITE_FLAGS =
   fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0);
 
-function safeWriteFile(path: string, content: string, mode = 0o644): void {
-  const fd = openSync(path, SAFE_WRITE_FLAGS, mode);
+/**
+ * Writes through a no-follow descriptor. `enforceMode` is applied even to existing files
+ * (used for files that contain restored plaintext secrets); without it, an existing file
+ * keeps its permissions (e.g. an executable script stays executable) and new files get 0644.
+ */
+function safeWriteFile(path: string, content: string, enforceMode?: number): void {
+  const fd = openSync(path, SAFE_WRITE_FLAGS, enforceMode ?? 0o644);
   try {
     writeFileSync(fd, content, 'utf-8');
-    try {
-      fchmodSync(fd, mode);
-    } catch {
-      // fchmod may be unavailable or fail on Windows / non-POSIX
+    if (enforceMode !== undefined) {
+      try {
+        fchmodSync(fd, enforceMode);
+      } catch {
+        // fchmod may be unavailable or fail on Windows / non-POSIX
+      }
     }
   } finally {
     closeSync(fd);

@@ -19,8 +19,14 @@ const PEM_END_PATTERN = /-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVA
  * Node.js Transform Stream for memory-efficient O(1) continuous
  * stream redaction of large logs or piped inputs.
  */
+/** Longest END marker is ~40 chars; keep a tail so a marker split across chunks is still found */
+const PEM_END_TAIL = 64;
+const MAX_OPEN_PEM_BUFFER = 1048576;
+
 export class RedactTransformStream extends Transform {
   private buffer = '';
+  /** True while discarding the body of an oversized private key block that has no END yet */
+  private droppingOpenPem = false;
   private decoder = new StringDecoder('utf8');
   private options: RedactStreamOptions;
   public readonly vault: Vault;
@@ -38,6 +44,18 @@ export class RedactTransformStream extends Transform {
   ): void {
     const text = typeof chunk === 'string' ? chunk : this.decoder.write(chunk);
     this.buffer += text;
+
+    // Still inside an oversized key block: discard everything up to and including its END marker
+    if (this.droppingOpenPem) {
+      const endMatch = this.buffer.match(PEM_END_PATTERN);
+      if (!endMatch || endMatch.index === undefined) {
+        this.buffer = this.buffer.slice(-PEM_END_TAIL);
+        callback();
+        return;
+      }
+      this.buffer = this.buffer.slice(endMatch.index + endMatch[0].length);
+      this.droppingOpenPem = false;
+    }
 
     // Process all completed PEM blocks first
     let pemEndMatch = this.buffer.match(PEM_END_PATTERN);
@@ -63,16 +81,17 @@ export class RedactTransformStream extends Transform {
     if (lastBegin !== -1) {
       const remaining = this.buffer.slice(lastBegin);
       if (!PEM_END_PATTERN.test(remaining)) {
-        if (this.buffer.length < 1048576) {
+        if (this.buffer.length < MAX_OPEN_PEM_BUFFER) {
           callback();
           return;
         }
-        // If an open PEM block exceeds 1MB without an END marker, redact the open block
-        // so private key body lines are never leaked unredacted line by line
+        // An open PEM block exceeded 1MB without an END marker: emit a placeholder and keep
+        // discarding following chunks until the END marker, so later key body lines never leak
         const before = this.buffer.slice(0, lastBegin);
         const prefixRes = redact(before, { ...this.options, vault: this.vault });
         this.push(prefixRes.text + '[REDACTED_PRIVATE_KEY]\n');
-        this.buffer = '';
+        this.buffer = this.buffer.slice(-PEM_END_TAIL);
+        this.droppingOpenPem = true;
         callback();
         return;
       }
@@ -98,6 +117,15 @@ export class RedactTransformStream extends Transform {
 
   override _flush(callback: TransformCallback): void {
     this.buffer += this.decoder.end();
+    if (this.droppingOpenPem) {
+      // Stream ended inside an oversized key block: emit only what follows a late END marker
+      const endMatch = this.buffer.match(PEM_END_PATTERN);
+      this.buffer =
+        endMatch && endMatch.index !== undefined
+          ? this.buffer.slice(endMatch.index + endMatch[0].length)
+          : '';
+      this.droppingOpenPem = false;
+    }
     if (this.buffer.length > 0) {
       // Check for unclosed private key block at end of stream
       const lastBegin = this.buffer.search(PEM_BEGIN_PATTERN);
