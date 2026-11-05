@@ -96,8 +96,16 @@ export class RedactEngine {
           endIndex = startIndex + secret.length;
         }
 
-        // Check if token matches allowlist
-        if (allowlist.length > 0 && allowlist.some((al) => secret === al || secret.includes(al))) {
+        // Check if token matches allowlist (exact match only, ignore empty strings)
+        if (
+          allowlist.length > 0 &&
+          allowlist.some((al) => typeof al === 'string' && al.length > 0 && secret === al)
+        ) {
+          continue;
+        }
+
+        // Run secondary pattern validator if defined (e.g. Luhn algorithm for credit cards)
+        if (pattern.validator && !pattern.validator(secret)) {
           continue;
         }
 
@@ -165,8 +173,17 @@ export class RedactEngine {
           index: i + 1,
           reversible
         });
+        if (reversible && vault) {
+          vault.restoreEntry({
+            placeholder: replacement,
+            original: m.secret,
+            patternId: m.pattern.id,
+            category: m.pattern.category,
+            timestamp: Date.now()
+          });
+        }
       } else if (reversible && vault) {
-        replacement = vault.getOrCreate(m.secret, m.pattern);
+        replacement = vault.getOrCreate(m.secret, m.pattern, text);
       } else {
         replacement = `[REDACTED_${m.pattern.placeholder}]`;
       }
@@ -176,16 +193,19 @@ export class RedactEngine {
       redactedText += replacement;
       cursor = m.endIndex;
 
-      matches.push({
+      const matchItem: RedactMatch = {
         patternId: m.pattern.id,
         patternName: m.pattern.name,
         category: m.pattern.category,
         severity: m.pattern.severity,
-        matchedText: m.secret,
         startIndex: m.startIndex,
         endIndex: m.endIndex,
         replacement
-      });
+      };
+      if (options?.includeMatchedText) {
+        matchItem.matchedText = m.secret;
+      }
+      matches.push(matchItem);
 
       stats[m.pattern.id] = (stats[m.pattern.id] ?? 0) + 1;
     }
@@ -195,7 +215,7 @@ export class RedactEngine {
 
     const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
 
-    return {
+    const resultObj: RedactResult & { vault?: Vault } = {
       text: redactedText,
       matches,
       hasLeaks: matches.length > 0,
@@ -204,6 +224,25 @@ export class RedactEngine {
       durationMs,
       vault
     };
+
+    // Ensure JSON.stringify(result) never leaks vault or raw secret keys
+    Object.defineProperty(resultObj, 'toJSON', {
+      value: function () {
+        return {
+          text: this.text,
+          hasLeaks: this.hasLeaks,
+          totalLeaks: this.totalLeaks,
+          stats: this.stats,
+          durationMs: this.durationMs,
+          matches: this.matches
+        };
+      },
+      enumerable: false,
+      writable: true,
+      configurable: true
+    });
+
+    return resultObj;
   }
 
   /**

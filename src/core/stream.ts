@@ -1,4 +1,5 @@
 import { Transform, type TransformCallback } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 import { redact } from './engine.js';
 import type { RedactOptions, RedactResult } from './types.js';
 import { Vault } from './vault.js';
@@ -11,12 +12,15 @@ export interface RedactStreamOptions extends RedactOptions {
   onLineRedacted?: (result: RedactResult) => void;
 }
 
+const PEM_END_PATTERN = /-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:\r?\n)?/;
+
 /**
  * Node.js Transform Stream for memory-efficient O(1) continuous
  * stream redaction of large logs or piped inputs.
  */
 export class RedactTransformStream extends Transform {
   private buffer = '';
+  private decoder = new StringDecoder('utf8');
   private options: RedactStreamOptions;
   public readonly vault: Vault;
 
@@ -31,10 +35,29 @@ export class RedactTransformStream extends Transform {
     _encoding: BufferEncoding,
     callback: TransformCallback
   ): void {
-    this.buffer += chunk.toString();
+    const text = typeof chunk === 'string' ? chunk : this.decoder.write(chunk);
+    this.buffer += text;
 
-    // If buffer contains a potential start of a PEM private key without its closing delimiter,
-    // buffer up to 64KB so multi-line private keys are matched as a unified block
+    // Process all completed PEM blocks first
+    let pemEndMatch = this.buffer.match(PEM_END_PATTERN);
+    while (pemEndMatch && pemEndMatch.index !== undefined) {
+      const pemEnd = pemEndMatch.index + pemEndMatch[0].length;
+      const pemSlice = this.buffer.slice(0, pemEnd);
+      this.buffer = this.buffer.slice(pemEnd);
+
+      const res = redact(pemSlice, {
+        ...this.options,
+        vault: this.vault
+      });
+      if (this.options.onLineRedacted && res.hasLeaks) {
+        this.options.onLineRedacted(res);
+      }
+      this.push(res.text);
+
+      pemEndMatch = this.buffer.match(PEM_END_PATTERN);
+    }
+
+    // If buffer contains an incomplete PEM block, hold it until completed (up to 64KB)
     if (
       this.buffer.includes('-----BEGIN') &&
       !this.buffer.includes('-----END') &&
@@ -44,23 +67,8 @@ export class RedactTransformStream extends Transform {
       return;
     }
 
-    // If a complete multi-line PEM block is detected, process the buffer directly
-    if (this.buffer.includes('-----BEGIN') && this.buffer.includes('-----END')) {
-      const res = redact(this.buffer, {
-        ...this.options,
-        vault: this.vault
-      });
-      if (this.options.onLineRedacted && res.hasLeaks) {
-        this.options.onLineRedacted(res);
-      }
-      this.push(res.text);
-      this.buffer = '';
-      callback();
-      return;
-    }
-
     const lines = this.buffer.split('\n');
-    // Keep the trailing chunk until full newline
+    // Keep the trailing chunk until full newline arrives
     this.buffer = lines.pop() ?? '';
 
     for (const line of lines) {
@@ -78,12 +86,14 @@ export class RedactTransformStream extends Transform {
   }
 
   override _flush(callback: TransformCallback): void {
+    this.buffer += this.decoder.end();
     if (this.buffer.length > 0) {
       const res = redact(this.buffer, {
         ...this.options,
         vault: this.vault
       });
       this.push(res.text);
+      this.buffer = '';
     }
     callback();
   }

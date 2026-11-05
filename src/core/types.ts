@@ -19,6 +19,8 @@ export interface RedactPattern {
   placeholder: string;
   /** Short description of the matched token */
   description: string;
+  /** Optional secondary validation function (e.g., Luhn check) */
+  validator?: (match: string) => boolean;
 }
 
 export interface RedactMatch {
@@ -26,7 +28,7 @@ export interface RedactMatch {
   patternName: string;
   category: SecretCategory;
   severity: Severity;
-  matchedText: string;
+  matchedText?: string;
   startIndex: number;
   endIndex: number;
   replacement: string;
@@ -91,6 +93,13 @@ export interface RedactOptions {
     index: number;
     reversible: boolean;
   }) => string;
+
+  /**
+   * If true, includes the raw matched secret text in match results.
+   * By default false for security to prevent secrets leaking in JSON serialization.
+   * @default false
+   */
+  includeMatchedText?: boolean;
 }
 
 export interface RedactResult {

@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
 import { DEFAULT_PATTERNS } from '../patterns/index.js';
@@ -61,12 +61,29 @@ export function createMcpServer(): McpServer {
   // Tool 2: unmask_text
   server.tool(
     'unmask_text',
-    'Restores masked session placeholders (e.g. [ANTHROPIC_API_KEY_1]) in Claude’s response back to original secret values using the secure in-memory vault.',
+    'Restores masked session placeholders (e.g. [ANTHROPIC_API_KEY_1]) in agent response back to original secret values using the secure in-memory vault. If outputFilePath is specified, writes to disk directly to isolate credentials from chat context.',
     {
-      text: z.string().describe('The text containing session placeholders to restore')
+      text: z.string().describe('The text containing session placeholders to restore'),
+      outputFilePath: z
+        .string()
+        .optional()
+        .describe(
+          'Optional path to file where restored content should be written without leaking plaintext secrets in context'
+        )
     },
-    async ({ text }) => {
+    async ({ text, outputFilePath }) => {
       const restored = unmask(text, sessionVault);
+      if (outputFilePath) {
+        writeFileSync(outputFilePath, restored, 'utf-8');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Successfully restored content to ${outputFilePath}. Plaintext secrets were not exposed in context.`
+            }
+          ]
+        };
+      }
       return {
         content: [
           {
@@ -81,12 +98,23 @@ export function createMcpServer(): McpServer {
   // Tool 3: scan_file
   server.tool(
     'scan_file',
-    'Scans a local file (.env, config, logs) for credentials before importing into Claude context window.',
+    'Scans a local file (.env, config, logs) for credentials before importing into agent context window.',
     {
       filePath: z.string().describe('Relative or absolute file path to inspect'),
-      reversible: z.boolean().default(true).describe('Whether to generate reversible placeholders')
+      reversible: z
+        .boolean()
+        .default(false)
+        .describe('Whether to generate reversible placeholders (default: false for one-way safe scan)'),
+      inPlace: z
+        .boolean()
+        .default(false)
+        .describe('If true, sanitizes the file directly in-place on disk'),
+      outputFilePath: z
+        .string()
+        .optional()
+        .describe('Optional destination path to write sanitized content')
     },
-    async ({ filePath, reversible }) => {
+    async ({ filePath, reversible, inPlace, outputFilePath }) => {
       if (!existsSync(filePath)) {
         return {
           isError: true,
@@ -103,6 +131,12 @@ export function createMcpServer(): McpServer {
         const rawContent = readFileSync(filePath, 'utf-8');
         const result = redact(rawContent, { reversible, vault: sessionVault });
 
+        if (inPlace) {
+          writeFileSync(filePath, result.text, 'utf-8');
+        } else if (outputFilePath) {
+          writeFileSync(outputFilePath, result.text, 'utf-8');
+        }
+
         return {
           content: [
             {
@@ -114,7 +148,8 @@ export function createMcpServer(): McpServer {
                   hasLeaks: result.hasLeaks,
                   totalLeaks: result.totalLeaks,
                   stats: result.stats,
-                  durationMs: result.durationMs
+                  durationMs: result.durationMs,
+                  writtenTo: inPlace ? filePath : (outputFilePath ?? null)
                 },
                 null,
                 2

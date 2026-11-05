@@ -39,6 +39,23 @@ export const ssnPattern: RedactPattern = {
   description: 'US Social Security Number in AAA-GG-SSSS format'
 };
 
+function isValidLuhn(numStr: string): boolean {
+  const digits = numStr.replace(/\D/g, '');
+  if (digits.length < 13 || digits.length > 19) return false;
+  let sum = 0;
+  let shouldDouble = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let digit = parseInt(digits.charAt(i), 10);
+    if (shouldDouble) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+    shouldDouble = !shouldDouble;
+  }
+  return sum % 10 === 0;
+}
+
 /**
  * Credit Card Number (Visa, MasterCard, Amex, Discover)
  */
@@ -47,9 +64,10 @@ export const creditCardPattern: RedactPattern = {
   name: 'Credit Card Number',
   category: 'pii',
   severity: 'critical',
-  regex: /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b/g,
+  regex: /\b(?:4[0-9]{3}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{1,4}|5[1-5][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|2[2-7][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|3[47][0-9]{2}[-\s]?[0-9]{6}[-\s]?[0-9]{5}|6(?:011|5[0-9]{2})[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4})\b/g,
   placeholder: 'CREDIT_CARD',
-  description: 'Major credit card numbers (Visa, MasterCard, Amex, Discover)'
+  description: 'Major credit card numbers (Visa, MasterCard, Amex, Discover)',
+  validator: isValidLuhn
 };
 
 /**
@@ -60,9 +78,9 @@ export const ipv6Pattern: RedactPattern = {
   name: 'IPv6 Address',
   category: 'network',
   severity: 'low',
-  regex: /\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b/g,
+  regex: /\b(?:(?:[0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7}|fe80::[0-9a-fA-F:]+|::1)\b/g,
   placeholder: 'IPV6_ADDRESS',
-  description: 'Standard 128-bit IPv6 address'
+  description: 'Standard or compressed 128-bit IPv6 address'
 };
 
 /**
@@ -73,7 +91,7 @@ export const phonePattern: RedactPattern = {
   name: 'Phone Number',
   category: 'pii',
   severity: 'medium',
-  regex: /(?:\+\d{1,3}[-.\s]?(?:\(?\d{1,4}\)?[-.\s]?)?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b|(?:\(\d{3}\)|\b\d{3})[-.\s]\d{3}[-.\s]\d{4}\b)/g,
+  regex: /(?:(?<![\w$])\+\d{1,3}[-.\s]?(?:\(?\d{1,4}\)?[-.\s]?)?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b|(?:\(\d{3}\)|\b\d{3})[-.\s]\d{3}[-.\s]\d{4}\b)/g,
   placeholder: 'PHONE_NUMBER',
   description: 'Telephone number in formatted local or international E.164 format'
 };

@@ -8,11 +8,12 @@ on:
 
 jobs:
   test:
-    name: Test & Build (Node ${{ matrix.node-version }})
-    runs-on: ubuntu-latest
+    name: Test & Build (${{ matrix.os }} - Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        node-version: [20.x, 22.x]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: [20.x, 22.x, 24.x]
 
     steps:
       - name: Checkout repository

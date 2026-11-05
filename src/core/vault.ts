@@ -11,15 +11,21 @@ export class Vault {
 
   /**
    * Retrieves an existing placeholder or allocates a new numbered placeholder
-   * for the given secret token.
+   * for the given secret token. Optionally ensures placeholder does not collide
+   * with literal text already in the document.
    */
-  public getOrCreate(original: string, pattern: RedactPattern): string {
+  public getOrCreate(original: string, pattern: RedactPattern, existingText?: string): string {
     const existing = this.originalToPlaceholder.get(original);
     if (existing) {
       return existing;
     }
 
-    const count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
+    let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
+    if (existingText) {
+      while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
+        count++;
+      }
+    }
     this.counters.set(pattern.placeholder, count);
 
     const placeholder = `[${pattern.placeholder}_${count}]`;

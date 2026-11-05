@@ -27,7 +27,10 @@ declare global {
 export function createExpressMiddleware(
   options: RedactOptions & { targetFields?: string[] } = {}
 ) {
-  const { targetFields = ['prompt', 'message', 'content', 'input'], ...redactOpts } = options;
+  const {
+    targetFields = ['prompt', 'message', 'content', 'input', 'system', 'text', 'query'],
+    ...redactOpts
+  } = options;
 
   return (
     req: { body?: Record<string, unknown>; redact?: RedactRequestExtension },
@@ -57,8 +60,19 @@ export function createExpressMiddleware(
             }
           }
         } else if (Array.isArray(value)) {
-          for (const item of value) {
-            if (item && typeof item === 'object') {
+          for (let i = 0; i < value.length; i++) {
+            const item = value[i];
+            if (typeof item === 'string' && targetFields.includes(key)) {
+              const result = redact(item, { ...redactOpts, reversible: true, vault });
+              value[i] = result.text;
+              if (result.hasLeaks) {
+                totalLeaks += result.totalLeaks;
+                allMatches.push(...result.matches);
+                for (const [pId, count] of Object.entries(result.stats)) {
+                  combinedStats[pId] = (combinedStats[pId] ?? 0) + count;
+                }
+              }
+            } else if (item && typeof item === 'object') {
               redactObject(item as Record<string, unknown>);
             }
           }

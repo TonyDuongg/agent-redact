@@ -20,7 +20,7 @@ const colors = {
 
 function printHelp(): void {
   const helpText = `
-${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.1${colors.reset}
+${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.2${colors.reset}
 ${colors.dim}Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents${colors.reset}
 
 ${colors.bold}USAGE:${colors.reset}
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   }
 
   if (args.includes('-v') || args.includes('--version')) {
-    console.log('agent-redact v0.1.1');
+    console.log('agent-redact v0.1.2');
     process.exit(0);
   }
 
@@ -122,11 +122,69 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Find non-flag file argument
-  const fileArg = args.find(
+  // Find non-flag file arguments
+  const fileArgs = args.filter(
     (a, i) => !a.startsWith('-') && !skipIndices.has(i)
   );
 
+  const effectiveReversible = isReversible || (loadedConfig?.reversible ?? false);
+  const vault = effectiveReversible ? new Vault() : undefined;
+
+  // Multi-file screening mode (used by pre-commit or batch audits)
+  if (fileArgs.length > 1) {
+    let totalLeaksAcrossFiles = 0;
+
+    for (const file of fileArgs) {
+      try {
+        const fileContent = readFileSync(file, 'utf-8');
+        const res = redact(fileContent, {
+          reversible: effectiveReversible,
+          vault,
+          include: loadedConfig?.include,
+          exclude: loadedConfig?.exclude,
+          allowlist: loadedConfig?.allowlist,
+          customPatterns: loadedConfig?.customPatterns,
+          detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+          entropy: loadedConfig?.entropy
+        });
+
+        if (isInplace) {
+          writeFileSync(file, res.text, 'utf-8');
+        }
+
+        if (res.hasLeaks) {
+          totalLeaksAcrossFiles += res.totalLeaks;
+          console.error(
+            `${colors.yellow}✖ [LEAK]${colors.reset} ${file}: ${res.totalLeaks} secret(s) detected`
+          );
+        } else {
+          console.error(`${colors.green}✔ [CLEAN]${colors.reset} ${file}`);
+        }
+      } catch {
+        console.error(`${colors.red}Error:${colors.reset} Cannot read file: ${file}`);
+        process.exit(1);
+      }
+    }
+
+    if (vaultOutFile && vault) {
+      writeFileSync(vaultOutFile, vault.toJSON(), 'utf-8');
+      console.error(`${colors.green}✔${colors.reset} Session vault saved to ${vaultOutFile}`);
+    }
+
+    if (totalLeaksAcrossFiles > 0) {
+      console.error(
+        `\n${colors.red}[agent-redact] Audit failed: detected ${totalLeaksAcrossFiles} secret(s) across ${fileArgs.length} files.${colors.reset}`
+      );
+      process.exit(1);
+    } else {
+      console.error(
+        `\n${colors.green}[agent-redact] All ${fileArgs.length} files are clean.${colors.reset}`
+      );
+      process.exit(0);
+    }
+  }
+
+  const fileArg = fileArgs[0];
   let content = '';
 
   if (fileArg) {
@@ -167,9 +225,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // Standard redact / mask mode
-  const effectiveReversible = isReversible || (loadedConfig?.reversible ?? false);
-  const vault = effectiveReversible ? new Vault() : undefined;
+  // Standard redact / mask mode (single file or stdin)
   const result = redact(content, {
     reversible: effectiveReversible,
     vault,
@@ -183,13 +239,7 @@ async function main(): Promise<void> {
 
   // Save vault file if requested
   if (vaultOutFile && vault) {
-    const entries = vault.entries().map((e) => ({
-      placeholder: e.placeholder,
-      original: e.original,
-      patternId: e.patternId,
-      category: e.category
-    }));
-    writeFileSync(vaultOutFile, JSON.stringify(entries, null, 2), 'utf-8');
+    writeFileSync(vaultOutFile, vault.toJSON(), 'utf-8');
     console.error(`${colors.green}✔${colors.reset} Session vault saved to ${vaultOutFile}`);
   }
 
@@ -223,6 +273,11 @@ async function main(): Promise<void> {
         }
       }
     }
+  }
+
+  // Exit with code 1 if secrets were detected during a scan (no output file and not reversible)
+  if (result.hasLeaks && !outputFile && !effectiveReversible && !isInplace) {
+    process.exit(1);
   }
 }
 

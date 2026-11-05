@@ -22,7 +22,7 @@ export const openaiApiKeyPattern: RedactPattern = {
   name: 'OpenAI API Key',
   category: 'credential',
   severity: 'critical',
-  regex: /\bsk-(?:proj|svcacct)-[A-Za-z0-9_\-]{40,160}\b|\bsk-[a-zA-Z0-9]{20,64}\b/g,
+  regex: /\bsk-(?:proj|svcacct)-[A-Za-z0-9_\-]{40,}\b|\bsk-[a-zA-Z0-9]{20,}\b/g,
   placeholder: 'OPENAI_API_KEY',
   description: 'OpenAI API key (standard, project, or service account)'
 };
@@ -48,7 +48,7 @@ export const awsSecretKeyPattern: RedactPattern = {
   name: 'AWS Secret Access Key',
   category: 'credential',
   severity: 'critical',
-  regex: /(?:aws_secret_access_key|aws_secret_key|secret_access_key)[\s=:'"]+([A-Za-z0-9\/+=]{40})(?:\s|$|['",])/gi,
+  regex: /(?:aws_secret_access_key|aws_secret_key|secret_access_key)[\s=:'"]+([A-Za-z0-9\/+=]{40})(?:\s|$|['",;])/gi,
   placeholder: 'AWS_SECRET_ACCESS_KEY',
   description: 'Amazon Web Services 40-character Secret Access Key'
 };
@@ -86,7 +86,7 @@ export const jwtTokenPattern: RedactPattern = {
   id: 'jwt-token',
   name: 'JSON Web Token (JWT)',
   category: 'credential',
-  severity: 'high',
+  severity: 'critical',
   regex: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_\-]{10,}\b/g,
   placeholder: 'JWT_TOKEN',
   description: 'JSON Web Token (JWT) in header.payload.signature format'
@@ -100,9 +100,9 @@ export const privateKeyPattern: RedactPattern = {
   name: 'Private Key',
   category: 'credential',
   severity: 'critical',
-  regex: /-----BEGIN (?:RSA |OPENSSH |DSA |EC |PGP )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |OPENSSH |DSA |EC |PGP )?PRIVATE KEY-----/g,
+  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[\s\S]*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
   placeholder: 'PRIVATE_KEY',
-  description: 'RSA, OpenSSH, DSA, EC, or PGP private key certificate'
+  description: 'RSA, OpenSSH, DSA, EC, Encrypted, or PGP private key certificate'
 };
 
 /**
@@ -139,7 +139,7 @@ export const databaseUrlPattern: RedactPattern = {
   name: 'Database Connection URL',
   category: 'credential',
   severity: 'critical',
-  regex: /\b(?:postgres|postgresql|mysql|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:]+:[^\s@]+@[^\s/:]+(?::\d+)?\/[^\s?"']+\b/g,
+  regex: /\b(?:postgres|postgresql|mysql|mariadb|mongodb|mongodb\+srv|redis|rediss):\/\/[^\s:]*:[^\s@]+@[^\s/:]+(?::\d+)?(?:\/[^\s?"']*)?(?:\?[^\s"']*)?\b/g,
   placeholder: 'DATABASE_URL',
   description: 'Database connection URL containing user and password credentials'
 };
