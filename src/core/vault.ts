@@ -10,6 +10,8 @@ export class Vault {
   private originalToPlaceholder = new Map<string, string>();
   private counters = new Map<string, number>();
   private maxEntries?: number;
+  /** Names (never values) of placeholders dropped by the size cap, oldest first */
+  private evictedPlaceholders = new Set<string>();
 
   constructor(options?: { maxEntries?: number }) {
     this.maxEntries = options?.maxEntries;
@@ -19,14 +21,39 @@ export class Vault {
     if (this.maxEntries && this.originalToPlaceholder.size >= this.maxEntries) {
       const oldestPlaceholder = this.placeholderToEntry.keys().next().value;
       if (oldestPlaceholder) {
-        const oldEntry = this.placeholderToEntry.get(oldestPlaceholder);
-        if (oldEntry) {
-          this.originalToPlaceholder.delete(oldEntry.original);
+        // Drop every secret mapped to this placeholder, not only the most recent one,
+        // so no original keeps pointing at a placeholder that can no longer be unmasked
+        for (const entry of this.placeholderToEntries.get(oldestPlaceholder) ?? []) {
+          if (this.originalToPlaceholder.get(entry.original) === oldestPlaceholder) {
+            this.originalToPlaceholder.delete(entry.original);
+          }
         }
         this.placeholderToEntry.delete(oldestPlaceholder);
         this.placeholderToEntries.delete(oldestPlaceholder);
+        this.rememberEvicted(oldestPlaceholder);
       }
     }
+  }
+
+  private rememberEvicted(placeholder: string): void {
+    this.evictedPlaceholders.add(placeholder);
+    // Bound the bookkeeping itself so a long-running session cannot grow it forever
+    const limit = (this.maxEntries ?? 0) * 10 || 100_000;
+    if (this.evictedPlaceholders.size > limit) {
+      const oldest = this.evictedPlaceholders.values().next().value;
+      if (oldest !== undefined) this.evictedPlaceholders.delete(oldest);
+    }
+  }
+
+  /**
+   * Placeholders present in `text` that were evicted by the `maxEntries` cap and
+   * therefore cannot be restored by `unmask`. Returns placeholder names only.
+   */
+  public findEvictedPlaceholders(text: string): string[] {
+    if (this.evictedPlaceholders.size === 0 || !text) return [];
+    return [...this.evictedPlaceholders].filter(
+      (p) => text.includes(p) && !this.placeholderToEntries.has(p)
+    );
   }
 
   /**
@@ -209,6 +236,7 @@ export class Vault {
     this.placeholderToEntries.clear();
     this.originalToPlaceholder.clear();
     this.counters.clear();
+    this.evictedPlaceholders.clear();
   }
 }
 

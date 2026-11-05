@@ -12,10 +12,18 @@ declare class Vault {
     private originalToPlaceholder;
     private counters;
     private maxEntries?;
+    /** Names (never values) of placeholders dropped by the size cap, oldest first */
+    private evictedPlaceholders;
     constructor(options?: {
         maxEntries?: number;
     });
     private evictOldestIfNeeded;
+    private rememberEvicted;
+    /**
+     * Placeholders present in `text` that were evicted by the `maxEntries` cap and
+     * therefore cannot be restored by `unmask`. Returns placeholder names only.
+     */
+    findEvictedPlaceholders(text: string): string[];
     /**
      * Retrieves an existing placeholder or allocates a new numbered placeholder
      * for the given secret token. Optionally ensures placeholder does not collide

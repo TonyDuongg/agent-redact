@@ -6,7 +6,7 @@ var anthropicApiKeyPattern = {
   name: "Anthropic API Key",
   category: "credential",
   severity: "critical",
-  regex: /\bsk-ant-(?:api03|admin01)-[A-Za-z0-9_\-]{80,120}\b|\bsk-ant-[A-Za-z0-9_\-]{20,}\b/g,
+  regex: /\bsk-ant-(?:api03|admin01)-[A-Za-z0-9_\-]{80,120}(?![A-Za-z0-9_])|\bsk-ant-[A-Za-z0-9_\-]{20,}(?![A-Za-z0-9_])/g,
   placeholder: "ANTHROPIC_API_KEY",
   description: "Anthropic Claude API key or Admin key"
 };
@@ -15,7 +15,7 @@ var openaiApiKeyPattern = {
   name: "OpenAI API Key",
   category: "credential",
   severity: "critical",
-  regex: /\bsk-(?:proj|svcacct)-[A-Za-z0-9_\-]{40,}\b|\bsk-[a-zA-Z0-9]{20,}\b/g,
+  regex: /\bsk-(?:proj|svcacct)-[A-Za-z0-9_\-]{40,}(?![A-Za-z0-9_])|\bsk-[a-zA-Z0-9]{20,}\b/g,
   placeholder: "OPENAI_API_KEY",
   description: "OpenAI API key (standard, project, or service account)"
 };
@@ -63,7 +63,7 @@ var jwtTokenPattern = {
   name: "JSON Web Token (JWT)",
   category: "credential",
   severity: "critical",
-  regex: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_\-]{10,}\b/g,
+  regex: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_\-]{10,}(?![A-Za-z0-9_])/g,
   placeholder: "JWT_TOKEN",
   description: "JSON Web Token (JWT) in header.payload.signature format"
 };
@@ -81,7 +81,7 @@ var googleApiKeyPattern = {
   name: "Google API Key",
   category: "credential",
   severity: "high",
-  regex: /\bAIza[0-9A-Za-z\-_]{35}\b/g,
+  regex: /\bAIza[0-9A-Za-z\-_]{35}(?![A-Za-z0-9_])/g,
   placeholder: "GOOGLE_API_KEY",
   description: "Google Cloud or Gemini AI Studio API key"
 };
@@ -128,7 +128,7 @@ var gitlabTokenPattern = {
   name: "GitLab Token",
   category: "credential",
   severity: "high",
-  regex: /\bglpat-[0-9a-zA-Z\-_]{20,}\b/g,
+  regex: /\bglpat-[0-9a-zA-Z\-_]{20,}(?![A-Za-z0-9_])/g,
   placeholder: "GITLAB_TOKEN",
   description: "GitLab Personal Access Token"
 };
@@ -137,7 +137,7 @@ var discordTokenPattern = {
   name: "Discord Bot Token",
   category: "credential",
   severity: "high",
-  regex: /\b[MNO][a-zA-Z0-9_-]{23,25}\.[a-zA-Z0-9_-]{6}\.[a-zA-Z0-9_-]{27,38}\b/g,
+  regex: /\b[MNO][a-zA-Z0-9_-]{23,25}\.[a-zA-Z0-9_-]{6}\.[a-zA-Z0-9_-]{27,38}(?![A-Za-z0-9_])/g,
   placeholder: "DISCORD_TOKEN",
   description: "Discord Bot Authentication Token"
 };
@@ -155,7 +155,7 @@ var sendgridApiKeyPattern = {
   name: "SendGrid API Key",
   category: "credential",
   severity: "high",
-  regex: /\bSG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}\b/g,
+  regex: /\bSG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}(?![A-Za-z0-9_])/g,
   placeholder: "SENDGRID_API_KEY",
   description: "SendGrid Email API key"
 };
@@ -182,7 +182,7 @@ var telegramBotTokenPattern = {
   name: "Telegram Bot Token",
   category: "credential",
   severity: "critical",
-  regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
+  regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_])/g,
   placeholder: "TELEGRAM_BOT_TOKEN",
   description: "Telegram Bot API authentication token"
 };
@@ -209,7 +209,7 @@ var gcpOauthSecretPattern = {
   name: "GCP OAuth Client Secret",
   category: "credential",
   severity: "critical",
-  regex: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/g,
+  regex: /\bGOCSPX-[A-Za-z0-9_-]{28}(?![A-Za-z0-9_])/g,
   placeholder: "GCP_OAUTH_CLIENT_SECRET",
   description: "Google Cloud Platform OAuth 2.0 client secret"
 };
@@ -274,7 +274,9 @@ var ipv4Pattern = {
   name: "IPv4 Address",
   category: "network",
   severity: "low",
-  regex: /(?<![vV])\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
+  // Skip four-part version numbers introduced by v / ver / version (see tests/audit-round5).
+  // `\b` before the keyword keeps words that merely end in "ver" (e.g. server=) matching.
+  regex: /(?<!\b(?:[vV](?:er(?:sion)?)?|VER(?:SION)?)[\s:=]{0,2})\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b/g,
   placeholder: "IPV4_ADDRESS",
   description: "Standard IPv4 network address"
 };

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### 🔒 Leak fixes
+- **Tokens whose last character is `-` were skipped.** Patterns over a base64url alphabet ended with `\b`, which cannot match between a final `-` and a following space or punctuation. Fixed-length patterns therefore missed the whole token (Telegram, GCP `GOCSPX-`, Google `AIza`, SendGrid, GitLab), about 1 token in 64. Variable-length ones (Anthropic, OpenAI project keys, Discord, JWT) left the final `-` visible. These patterns now end with `(?![A-Za-z0-9_])`, which behaves exactly like `\b` for every other ending.
+
+### 🎯 Accuracy
+- IPv4: four-part version numbers after `v` / `ver` / `version` (any case, optional `:`/`=`) are no longer redacted. The previous `(?<![vV])` lookbehind had no effect.
+
+### 🧰 Vault / MCP
+- `Vault.findEvictedPlaceholders(text)` lists placeholders (names only) that the `maxEntries` cap evicted.
+- MCP `unmask_text` now warns when placeholders could not be restored because they were evicted, instead of silently leaving them in the output file.
+- Eviction now drops every secret mapped to the evicted placeholder.
+- `createMcpServer({ vaultMaxEntries })` makes the session vault cap configurable (default 10,000).
+
+---
+
 ## [0.1.4] - 2026-11-05
 
 ### ⚠️ Behavior Change
