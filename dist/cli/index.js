@@ -1035,7 +1035,7 @@ function createMcpServer(options = {}) {
       try {
         const restored = unmask(text, sessionVault);
         safeWriteFile(outCheck.realPath, restored, 384);
-        const evicted = sessionVault.findEvictedPlaceholders(restored);
+        const evicted = sessionVault.findEvictedPlaceholders(text);
         const evictionNote = evicted.length > 0 ? ` WARNING: ${evicted.length} placeholder(s) could not be restored because they were evicted from the session vault (limit ${vaultMaxEntries} entries): ${evicted.join(", ")}. Re-run redact_text on the original source to regenerate them.` : "";
         return {
           content: [

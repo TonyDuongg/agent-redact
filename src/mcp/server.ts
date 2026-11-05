@@ -231,8 +231,10 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
       try {
         const restored = unmask(text, sessionVault);
         safeWriteFile(outCheck.realPath, restored, 0o600);
-        // Placeholder names are not secret; report them so a capped vault never fails silently
-        const evicted = sessionVault.findEvictedPlaceholders(restored);
+        // Placeholder names are not secret; report them so a capped vault never fails silently.
+        // Inspect the caller's input, never `restored`: the result must not depend on plaintext
+        // secret values (which could otherwise act as an oracle on their contents).
+        const evicted = sessionVault.findEvictedPlaceholders(text);
         const evictionNote =
           evicted.length > 0
             ? ` WARNING: ${evicted.length} placeholder(s) could not be restored because they were evicted from the session vault (limit ${vaultMaxEntries} entries): ${evicted.join(', ')}. Re-run redact_text on the original source to regenerate them.`
