@@ -424,40 +424,26 @@ Some MCP clients start servers with an unexpected working directory (for example
 
 ---
 
-### 8. Multi-Language & Python Agents (LangChain, AutoGen, CrewAI)
+### 8. Python Agents (LangChain, CrewAI, AutoGen) & Other Languages
 
-For Python, Go, Rust, or any non-Node environment, `agent-redact` integrates seamlessly via CLI subprocess or stdin pipes:
+The `agent-redact` Python package (in [`python/`](python/)) wraps the CLI, so Python code gets the same engine with no Python dependencies. It needs Node.js 20+; the CLI is found via `AGENT_REDACT_CLI`, a global `npm i -g agent-redact`, or `npx`.
 
 ```python
-import os
-import subprocess
-import sys
+from agent_redact import redact, scan, Session
 
-def sanitize_prompt_for_agent(raw_prompt: str) -> str:
-    """Pipes sensitive prompts through agent-redact before sending to any LLM."""
-    cmd = ["npx.cmd" if sys.platform == "win32" else "npx", "-y", "agent-redact"]
-    proc = subprocess.run(
-        cmd,
-        input=raw_prompt,
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        check=True,
-        shell=(sys.platform == "win32")
-    )
-    return proc.stdout
+result = redact(prompt)                 # one-way: result.text, result.matches (no values)
 
-# Safe to send to LangChain, AutoGen, or CrewAI:
-clean_prompt = sanitize_prompt_for_agent(
-    f"My API key is {os.environ['ANTHROPIC_API_KEY']} and DB is {os.environ['DATABASE_URL']}"
-)
-print(clean_prompt)
-# => "My API key is [REDACTED_ANTHROPIC_API_KEY] and DB is [REDACTED_DATABASE_URL]"
+with Session() as s:                    # reversible across a whole conversation
+    safe = s.redact(prompt)             # [ANTHROPIC_API_KEY_1] ...
+    answer = llm.invoke(safe)
+    print(s.unmask(answer))
+
+findings = scan(["."])                  # repo audit, honours .gitignore
 ```
 
-> Need to restore the values afterwards? Use reversible mode with a vault file:
-> `agent-redact -r --vault-out session.vault.json`, then `agent-redact --unmask session.vault.json`.
-> Without `--vault-out` the placeholders cannot be restored.
+The Session vault is stored in a private temporary directory, **encrypted** with a random per-session passphrase that never touches disk, and is deleted when the `with` block ends. Install from the repository with `pip install ./python` until the package is published on PyPI.
+
+Other languages can pipe text through the CLI: `agent-redact --json` on stdin returns the redacted text plus matches. Use `-r --vault-out <file> --vault-key-env <VAR>` and `--unmask <file>` for reversible round-trips, and `--vault-in` to continue numbering across calls.
 
 ---
 

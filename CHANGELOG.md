@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐍 Python package (`python/`)
+- **`agent-redact` for Python:** a dependency-free wrapper around the CLI, so it uses exactly the same engine.
+  - `redact()` returns text plus matches, without secret values.
+  - `scan()` covers paths or the git index.
+  - `Session` provides reversible masking across calls. Its vault is encrypted with a random per-session passphrase that never touches disk, and is deleted on close.
+- **CLI discovery:** `AGENT_REDACT_CLI`, then a global `agent-redact`, then `npx agent-redact@<same version>`.
+- **CI:** new Python job (Ubuntu and Windows, Python 3.9 and 3.13). A test keeps the Python version in sync with `package.json`.
+- **New CLI flags:** `--vault-in <file>` continues an existing (encrypted) vault, so numbering carries over between runs; `--preset <a,b>` enables presets from the command line.
+
 ### 🎯 Detection
 - **New AI/LLM provider keys:** OpenRouter (`sk-or-v1-`), Groq (`gsk_`), xAI (`xai-`), Perplexity (`pplx-`), Replicate (`r8_`), Hugging Face org tokens (`api_org_`), LangSmith (`lsv2_pt_` / `lsv2_sk_`). Lengths are lower bounds, so longer future keys are still caught.
 - **`vn-pii` preset (opt-in):** Vietnamese CCCD (with province-code validation), CMND/CCCD after an ID keyword, tax code (MST) and bank account numbers after their keywords. Enable it with `presets: ['vn-pii']` (option or config). Unknown preset names throw.

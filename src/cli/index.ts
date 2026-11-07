@@ -6,6 +6,7 @@ import { Vault } from '../core/vault.js';
 import { loadConfig } from '../core/config.js';
 import { readTextForScan } from '../core/files.js';
 import { encryptVaultJson, decryptVaultJson, isEncryptedVault } from '../core/vault-crypto.js';
+import { resolvePresets } from '../patterns/presets.js';
 import { VERSION } from '../version.js';
 import {
   runScan,
@@ -42,6 +43,40 @@ function resolveVaultKey(vaultKeyEnv: string | undefined): string | undefined {
     return value;
   }
   return process.env['AGENT_REDACT_VAULT_KEY'] || undefined;
+}
+
+/** Reads a vault file, decrypting it when needed. Exits 2 for an encrypted vault without a key. */
+function loadVault(path: string, vaultKeyEnv: string | undefined): Vault {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf-8');
+  } catch {
+    console.error(`${colors.red}Error:${colors.reset} Cannot read vault file: ${path}`);
+    process.exit(1);
+  }
+  let json = raw;
+  if (isEncryptedVault(raw)) {
+    const key = resolveVaultKey(vaultKeyEnv);
+    if (!key) {
+      console.error(
+        `${colors.red}Error:${colors.reset} ${path} is encrypted; pass --vault-key-env <VAR> ` +
+          '(or set AGENT_REDACT_VAULT_KEY) with the passphrase.'
+      );
+      process.exit(2);
+    }
+    try {
+      json = decryptVaultJson(raw, key);
+    } catch (err: unknown) {
+      console.error(`${colors.red}Error:${colors.reset} ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  }
+  try {
+    return Vault.fromJSON(json);
+  } catch (err: unknown) {
+    console.error(`${colors.red}Error:${colors.reset} ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
 }
 
 function saveVault(path: string, vault: Vault, vaultKeyEnv: string | undefined): void {
@@ -102,6 +137,8 @@ ${colors.bold}OPTIONS:${colors.reset}
   --check, --fail-on-leak     Exit with code 1 if any secrets are detected (CI/pre-commit)
   --vault-out <file>          Save generated session vault mappings to JSON file
   --vault-key-env <VAR>       Encrypt/decrypt the vault with the passphrase in env var VAR
+  --vault-in <file>           Continue an existing vault (numbering carries over between runs)
+  --preset <a,b>              Enable opt-in pattern presets (e.g. vn-pii)
   --unmask <vaultFile>        Restore previously masked file using saved vault file
   --stats                     Display leak statistics breakdown table
   -h, --help                  Show this help message
@@ -166,7 +203,9 @@ async function main(): Promise<void> {
     '--report',
     '--baseline',
     '--write-baseline',
-    '--vault-key-env'
+    '--vault-key-env',
+    '--vault-in',
+    '--preset'
   ]);
   const BOOLEAN_FLAGS = new Set([
     '-r',
@@ -234,6 +273,8 @@ async function main(): Promise<void> {
   const writeBaselineArg = valueAfter('--write-baseline');
   const vaultKeyArg = valueAfter('--vault-key-env');
   const vaultKeyEnv = vaultKeyArg.value;
+  const vaultInArg = valueAfter('--vault-in');
+  const presetArg = valueAfter('--preset');
   const isStaged = args.includes('--staged');
 
   // Track argument indices that belong to flags with values
@@ -242,7 +283,7 @@ async function main(): Promise<void> {
   if (vaultOutIdx !== -1) skipIndices.add(vaultOutIdx + 1);
   if (unmaskIdx !== -1) skipIndices.add(unmaskIdx + 1);
   if (configIdx !== -1) skipIndices.add(configIdx + 1);
-  for (const a of [formatArg, reportArg, baselineArg, writeBaselineArg, vaultKeyArg]) {
+  for (const a of [formatArg, reportArg, baselineArg, writeBaselineArg, vaultKeyArg, vaultInArg, presetArg]) {
     if (a.index !== -1) skipIndices.add(a.index + 1);
   }
 
@@ -268,7 +309,21 @@ async function main(): Promise<void> {
   );
 
   const effectiveReversible = isReversible || (loadedConfig?.reversible ?? false);
-  const vault = effectiveReversible ? new Vault() : undefined;
+  // --preset a,b adds opt-in presets on top of any configured ones; unknown names are rejected
+  const effectivePresets = [
+    ...(loadedConfig?.presets ?? []),
+    ...(presetArg.value ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  ];
+  try {
+    resolvePresets(effectivePresets);
+  } catch (err: unknown) {
+    console.error(`${colors.red}Error:${colors.reset} ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(2);
+  }
+
+  // --vault-in continues an existing session vault, so placeholder numbers never collide
+  // across runs (used by the Python wrapper's Session)
+  const vault = effectiveReversible ? (vaultInArg.value ? loadVault(vaultInArg.value, vaultKeyEnv) : new Vault()) : undefined;
 
   // Reversible placeholders written in-place without a saved vault can never be restored:
   // the original secrets would be destroyed. Refuse instead of silently losing data.
@@ -330,7 +385,7 @@ async function main(): Promise<void> {
           allowlist: loadedConfig?.allowlist,
           customPatterns: loadedConfig?.customPatterns,
           detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
-          presets: loadedConfig?.presets,
+          presets: effectivePresets,
           entropy: loadedConfig?.entropy
         }
       });
@@ -392,7 +447,7 @@ async function main(): Promise<void> {
         allowlist: loadedConfig?.allowlist,
         customPatterns: loadedConfig?.customPatterns,
         detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
-        presets: loadedConfig?.presets,
+        presets: effectivePresets,
         entropy: loadedConfig?.entropy
       })
     }));
@@ -442,32 +497,8 @@ async function main(): Promise<void> {
 
   // Handle unmask mode
   if (unmaskVaultFile) {
-    let rawVault: string;
+    const vault = loadVault(unmaskVaultFile, vaultKeyEnv);
     try {
-      rawVault = readFileSync(unmaskVaultFile, 'utf-8');
-    } catch {
-      console.error(`${colors.red}Error:${colors.reset} Cannot read vault file: ${unmaskVaultFile}`);
-      process.exit(1);
-    }
-    let vaultJson = rawVault;
-    if (isEncryptedVault(rawVault)) {
-      const key = resolveVaultKey(vaultKeyEnv);
-      if (!key) {
-        console.error(
-          `${colors.red}Error:${colors.reset} ${unmaskVaultFile} is encrypted; pass --vault-key-env <VAR> ` +
-            '(or set AGENT_REDACT_VAULT_KEY) with the passphrase.'
-        );
-        process.exit(2);
-      }
-      try {
-        vaultJson = decryptVaultJson(rawVault, key);
-      } catch (err: unknown) {
-        console.error(`${colors.red}Error:${colors.reset} ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
-      }
-    }
-    try {
-      const vault = Vault.fromJSON(vaultJson);
       const restoredText = unmask(content, vault);
 
       if (outputFile) {
@@ -496,7 +527,7 @@ async function main(): Promise<void> {
     allowlist: loadedConfig?.allowlist,
     customPatterns: loadedConfig?.customPatterns,
     detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
-    presets: loadedConfig?.presets,
+    presets: effectivePresets,
     entropy: loadedConfig?.entropy
   });
 
