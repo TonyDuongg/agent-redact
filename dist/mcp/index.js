@@ -889,6 +889,9 @@ function isBinaryFile(path, sampleSize = 8192) {
   }
 }
 
+// src/version.ts
+var VERSION = "0.1.5";
+
 // src/mcp/server.ts
 function realpathOrNearest(p) {
   let current = resolve(p);
@@ -978,7 +981,7 @@ function createMcpServer(options = {}) {
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
   const server = new McpServer({
     name: "agent-redact",
-    version: "0.1.5"
+    version: VERSION
   });
   server.tool(
     "redact_text",

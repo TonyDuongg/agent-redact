@@ -1,15 +1,9 @@
-import { statSync, appendFileSync, existsSync } from 'node:fs';
+import { statSync, appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import { redact } from '../core/engine.js';
 import { loadConfig } from '../core/config.js';
 import { walkFiles, readTextForScan, DEFAULT_MAX_SCAN_BYTES } from '../core/files.js';
-import type { RedactMatch } from '../core/types.js';
-
-interface FileLeakRecord {
-  file: string;
-  line: number;
-  match: RedactMatch;
-}
+import { scanContent, loadBaseline, toSarif, type Finding } from '../core/scan.js';
+import { VERSION } from '../version.js';
 
 function getInput(name: string, fallback: string = ''): string {
   const keyWithUnderscore = `INPUT_${name.replace(/-/g, '_').toUpperCase()}`;
@@ -41,10 +35,6 @@ function escapeCommandProperty(value: string): string {
   return escapeCommandData(value).replace(/:/g, '%3A').replace(/,/g, '%2C');
 }
 
-function calculateLineNumber(content: string, index: number): number {
-  return content.slice(0, index).split('\n').length;
-}
-
 export async function runAction(): Promise<void> {
   const scanPath = getInput('scan-path', '.');
   const failOnLeak = getInput('fail-on-leak', 'true').toLowerCase() === 'true';
@@ -68,6 +58,9 @@ export async function runAction(): Promise<void> {
   console.log(`[agent-redact] Fail on leak: ${failOnLeak} | Entropy detection: ${detectEntropy}`);
 
   const loadedConfig = loadConfig(configPath);
+  const baselinePath = getInput('baseline') || undefined;
+  const baseline = baselinePath ? loadBaseline(baselinePath) : undefined;
+  const sarifPath = getInput('sarif-file') || undefined;
   const filesToScan: string[] = [];
 
   const stat = statSync(scanPath);
@@ -79,7 +72,8 @@ export async function runAction(): Promise<void> {
 
   console.log(`[agent-redact] Discovered ${filesToScan.length} text files to analyze.`);
 
-  const allLeaks: FileLeakRecord[] = [];
+  const allLeaks: Finding[] = [];
+  const suppressed = { inline: 0, baseline: 0 };
   const skipped: Record<'binary' | 'too-large' | 'unreadable', number> = {
     binary: 0,
     'too-large': 0,
@@ -95,32 +89,42 @@ export async function runAction(): Promise<void> {
       skipped[read.reason]++;
       continue;
     }
-    const content = read.content;
-
-    const result = redact(content, {
+    const relPath = relative(process.cwd(), filePath).replace(/\\/g, '/');
+    // Line numbers come from a line-start index (the old slice/split per finding was O(n·m));
+    // inline agent-redact-ignore comments and the optional baseline are honoured
+    const result = scanContent(read.content, relPath, {
       include: loadedConfig?.include,
       exclude: loadedConfig?.exclude,
       allowlist: loadedConfig?.allowlist,
       customPatterns: loadedConfig?.customPatterns,
       detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
-      entropy: loadedConfig?.entropy
+      entropy: loadedConfig?.entropy,
+      respectInlineIgnore: true,
+      baseline
     });
+    suppressed.inline += result.suppressed.inline;
+    suppressed.baseline += result.suppressed.baseline;
 
-    if (result.hasLeaks) {
-      const relPath = relative(process.cwd(), filePath);
-      for (const match of result.matches) {
-        const line = calculateLineNumber(content, match.startIndex);
-        allLeaks.push({ file: relPath, line, match });
-
-        // Emit GitHub annotation for PR diffs
-        // Unescaped ',' or ':' in a path would corrupt the annotation's properties
-        const annotationPath = escapeCommandProperty(relPath.replace(/\\/g, '/'));
-        const message = escapeCommandData(
-          `[agent-redact] Leaked ${match.patternName} (${match.severity.toUpperCase()}) detected!`
-        );
-        console.log(`::error file=${annotationPath},line=${line}::${message}`);
-      }
+    for (const finding of result.findings) {
+      allLeaks.push(finding);
+      // Emit GitHub annotation for PR diffs.
+      // Unescaped ',' or ':' in a path would corrupt the annotation's properties
+      const annotationPath = escapeCommandProperty(finding.file);
+      const message = escapeCommandData(
+        `[agent-redact] Leaked ${finding.patternName} (${finding.severity.toUpperCase()}) detected!`
+      );
+      console.log(`::error file=${annotationPath},line=${finding.line},col=${finding.column}::${message}`);
     }
+  }
+
+  if (sarifPath) {
+    writeFileSync(sarifPath, JSON.stringify(toSarif(allLeaks, VERSION), null, 2) + '\n', 'utf-8');
+    console.log(`[agent-redact] SARIF report written to ${sarifPath}`);
+  }
+  if (suppressed.inline + suppressed.baseline > 0) {
+    console.log(
+      `[agent-redact] Suppressed ${suppressed.inline} finding(s) by inline comment and ${suppressed.baseline} by baseline.`
+    );
   }
 
   const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
@@ -155,7 +159,7 @@ export async function runAction(): Promise<void> {
     summaryMd += `| :--- | :---: | :--- | :---: | :---: |\n`;
 
     for (const leak of allLeaks) {
-      summaryMd += `| \`${leak.file}\` | ${leak.line} | **${leak.match.patternName}** | \`${leak.match.severity.toUpperCase()}\` | ${leak.match.category} |\n`;
+      summaryMd += `| \`${leak.file}\` | ${leak.line} | **${leak.patternName}** | \`${leak.severity.toUpperCase()}\` | ${leak.category} |\n`;
     }
   } else {
     summaryMd += `🎉 All scanned files are clean and safe from credentials & PII leaks!\n`;

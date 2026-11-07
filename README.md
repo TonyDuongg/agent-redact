@@ -484,16 +484,95 @@ jobs:
           fail-on-leak: 'true'
           detect-entropy: 'true'
           exclude: 'node_modules,dist,build,.git,coverage'
+          baseline: '.agent-redact-baseline.json'   # optional: ignore accepted findings
+          sarif-file: 'agent-redact.sarif'          # optional: GitHub code scanning report
+```
+
+To show findings in the repository's **Security → Code scanning** tab, upload the SARIF file (requires `permissions: security-events: write`):
+
+```yaml
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: agent-redact.sarif
 ```
 
 #### GitHub Action Features
-* **In-PR Error Annotations**: Pinpoints exact file and line numbers directly on the GitHub PR Diff view.
-* **Rich Markdown Step Summary**: Renders an audit table in GitHub Actions summary with detected categories, threat severities, and timestamps.
-* **Zero Runtime Overhead**: Executes in milliseconds with native Node.js.
+* **In-PR Error Annotations**: exact file, line and column on the PR diff.
+* **Markdown Step Summary**: audit table with categories and severities.
+* **SARIF 2.1.0 output** with `security-severity` per rule. Secret values are never included, only a fingerprint.
+* **Binary-safe and size-capped** scanning (`max-file-size`, default 5 MB).
+* **Baselines and `agent-redact-ignore` comments** for accepted findings (see below).
 
 ---
 
-### 11. Pre-commit Git Hook
+### 11. Scanning Repositories, Baselines & Inline Ignores
+
+Pass directories or several files to switch the CLI to **scan mode**. Findings are reported with file, line and column, never with the secret value, and the exit code is `1` when anything is found.
+
+```bash
+npx agent-redact .                                   # whole repo; honours .gitignore via git ls-files
+npx agent-redact src config/app.env                  # several targets
+npx agent-redact --staged                            # only what is about to be committed (git index)
+npx agent-redact . --format sarif --report out.sarif # SARIF 2.1.0 (or --format json)
+```
+
+Outside a git work tree, `node_modules`, `dist`, `build`, `coverage`, `.next`, `vendor`, `.venv` and similar directories are skipped. Binary files (NUL-byte sniffing) and files over 5 MB are skipped and counted in the summary.
+
+**Accepting known findings** (test fixtures, documentation samples):
+
+```bash
+npx agent-redact . --write-baseline .agent-redact-baseline.json   # record what exists today
+npx agent-redact . --baseline .agent-redact-baseline.json         # later scans report only new findings
+```
+
+The baseline stores `sha256(pattern, file, value)` fingerprints, never the values. Alternatively, mark individual lines:
+
+```ini
+TEST_KEY=AKIA...EXAMPLE   # agent-redact-ignore
+# agent-redact-ignore-next-line
+FIXTURE_TOKEN=ghp_...
+```
+
+> Ignore comments and baselines apply **only to scanning/auditing** (CLI scan mode, GitHub Action, SARIF). They never disable redaction of prompts, streams or files, and the Claude Code hook ignores them on purpose, so an agent cannot unlock a file by editing a comment into it.
+
+---
+
+### 12. Claude Code Hook (block secrets before they reach the model)
+
+`agent-redact hook` reads Claude Code's hook event JSON on stdin and exits with code `2` to block. Messages name the secret *types*, never the values.
+
+| Event / tool | Behaviour |
+| :--- | :--- |
+| `UserPromptSubmit` | Blocks prompts that contain secrets (the prompt is not sent) |
+| `PreToolUse` → `Read` | Blocks reading a file that contains secrets (suggests the MCP `scan_file` tool for a redacted copy) |
+| `PreToolUse` → `Bash` | Blocks commands that contain a literal secret, or that print a file with secrets (`cat`, `grep`, `head`, `jq`, …) |
+| `PreToolUse` → `WebFetch`, `WebSearch`, MCP tools, others | Blocks calls whose input contains secrets (exfiltration guard) |
+| `PreToolUse` → `Write` / `Edit` | Allowed by default; add `--block-writes` to block secrets being written |
+
+Install globally (`npm i -g agent-redact`) so the hook starts fast, then add to `.claude/settings.json` (project) or `~/.claude/settings.json` (user):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "agent-redact hook" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "agent-redact hook" }] }
+    ]
+  }
+}
+```
+
+The hook uses your `.agentredactrc` from the session's working directory (custom patterns, allowlist, entropy settings).
+
+> Limits: the hook sees tool **inputs**, not outputs. A command such as `env`, or a script that prints secrets indirectly, is not detected. Combine it with the MCP `scan_file` tool and deny rules for sensitive paths.
+
+---
+
+### 13. Pre-commit Git Hook
 
 Prevent accidental credential commits locally using [pre-commit](https://pre-commit.com):
 
@@ -505,6 +584,8 @@ repos:
     hooks:
       - id: agent-redact
 ```
+
+Without the pre-commit framework, a plain git hook works too: `npx agent-redact --staged` in `.git/hooks/pre-commit` scans exactly what is being committed.
 
 ---
 

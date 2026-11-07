@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Repository scanning & CI
+- **Scan mode:** `agent-redact <dir|files...>` reports findings (file:line:column, never values) and exits 1 when any are found. Inside git it uses `git ls-files --cached --others --exclude-standard`, so `.gitignore` is honoured exactly; outside git, common build and dependency directories are skipped. Binary and oversized files are skipped.
+- **`--staged`:** scans the git index, i.e. exactly what is about to be committed.
+- **`--format json|sarif` and `--report <file>`:** SARIF 2.1.0 with `security-severity`, for GitHub code scanning.
+- **Baselines:** `--write-baseline` / `--baseline` store fingerprints only (`sha256(pattern, file, value)`).
+- **Inline ignore:** `agent-redact-ignore` (same line) and `agent-redact-ignore-next-line`. Honoured only in scan/audit modes, never for redaction, and never by the Claude Code hook.
+- **GitHub Action:**
+  - new `baseline` and `sarif-file` inputs;
+  - annotations now carry the column;
+  - line numbers come from a line-start index instead of re-splitting the file for every finding.
+- **Multi-file in-place mode** accepts directories, skips binaries and rewrites only files that contain secrets.
+
+### 🛡️ Claude Code hook
+- **`agent-redact hook [--block-writes]`** reads the hook event JSON on stdin and exits 2 to block. It covers:
+  - prompts containing secrets;
+  - `Read` of files with secrets;
+  - `Bash` commands that contain secrets or print secret files;
+  - outbound tools (WebFetch, WebSearch, MCP…) whose input contains secrets.
+
+  Messages name secret types, never values.
+
+### 🔧 Internal
+- **Single version source:** `src/version.ts`, used by the CLI, MCP server and SARIF reports; a test keeps it equal to `package.json`.
+
 ### ✨ Streaming & SDK round-trips
 - **`StreamingUnmasker`, `unmaskTextStream`, `createUnmaskStream`:** restore placeholders in streamed LLM output even when one is split across chunks. A chunk tail is held back only while it is the start of a placeholder that exists in the vault, so ordinary `[` text is never delayed.
 - **`unmaskAnthropicStream` / `unmaskOpenAIStream`:** adapters for the Messages and Chat Completions event streams, covering text deltas and tool-call JSON (restored secrets are JSON-escaped, so `partial_json` / `arguments` stay valid).

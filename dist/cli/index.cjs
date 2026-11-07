@@ -7,6 +7,8 @@ var mcp_js = require('@modelcontextprotocol/sdk/server/mcp.js');
 var stdio_js = require('@modelcontextprotocol/sdk/server/stdio.js');
 var zod = require('zod');
 var os = require('os');
+var child_process = require('child_process');
+var crypto = require('crypto');
 
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -404,17 +406,17 @@ var init_patterns = __esm({
 });
 
 // src/core/entropy.ts
-function calculateShannonEntropy(str) {
-  if (!str || str.length === 0) {
+function calculateShannonEntropy(str2) {
+  if (!str2 || str2.length === 0) {
     return 0;
   }
   const frequencies = /* @__PURE__ */ new Map();
-  for (let i = 0; i < str.length; i++) {
-    const char = str[i];
+  for (let i = 0; i < str2.length; i++) {
+    const char = str2[i];
     frequencies.set(char, (frequencies.get(char) ?? 0) + 1);
   }
   let entropy = 0;
-  const len = str.length;
+  const len = str2.length;
   for (const count of frequencies.values()) {
     const p = count / len;
     entropy -= p * Math.log2(p);
@@ -918,6 +920,9 @@ var init_engine = __esm({
     defaultEngine = new RedactEngine();
   }
 });
+function hasKnownBinaryExtension(path$1) {
+  return KNOWN_BINARY_EXTENSIONS.has(path.extname(path$1).toLowerCase());
+}
 function isBinaryFile(path, sampleSize = 8192) {
   const fd = fs.openSync(path, "r");
   try {
@@ -928,10 +933,107 @@ function isBinaryFile(path, sampleSize = 8192) {
     fs.closeSync(fd);
   }
 }
-var DEFAULT_MAX_SCAN_BYTES;
+function readTextForScan(path, maxBytes = DEFAULT_MAX_SCAN_BYTES) {
+  try {
+    const { size } = fs.statSync(path);
+    if (size > maxBytes) return { ok: false, reason: "too-large", size };
+    if (hasKnownBinaryExtension(path) || size > 0 && isBinaryFile(path)) {
+      return { ok: false, reason: "binary", size };
+    }
+    return { ok: true, content: fs.readFileSync(path, "utf-8") };
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+}
+function walkFiles(dir, excludeDirs, result = []) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return result;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== ".git" && !excludeDirs.has(entry.name)) {
+        walkFiles(fullPath, excludeDirs, result);
+      }
+    } else if (entry.isFile() && !hasKnownBinaryExtension(entry.name)) {
+      result.push(fullPath);
+    }
+  }
+  return result;
+}
+var DEFAULT_MAX_SCAN_BYTES, KNOWN_BINARY_EXTENSIONS;
 var init_files = __esm({
   "src/core/files.ts"() {
     DEFAULT_MAX_SCAN_BYTES = 5 * 1024 * 1024;
+    KNOWN_BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".gif",
+      ".ico",
+      ".webp",
+      ".svg",
+      ".bmp",
+      ".tif",
+      ".tiff",
+      ".avif",
+      ".psd",
+      ".wasm",
+      ".zip",
+      ".tar",
+      ".gz",
+      ".tgz",
+      ".bz2",
+      ".xz",
+      ".7z",
+      ".rar",
+      ".zst",
+      ".exe",
+      ".dll",
+      ".so",
+      ".dylib",
+      ".node",
+      ".o",
+      ".a",
+      ".lib",
+      ".class",
+      ".jar",
+      ".pyc",
+      ".whl",
+      ".pdf",
+      ".docx",
+      ".xlsx",
+      ".pptx",
+      ".bin",
+      ".dat",
+      ".db",
+      ".sqlite",
+      ".woff",
+      ".woff2",
+      ".ttf",
+      ".otf",
+      ".eot",
+      ".mp3",
+      ".mp4",
+      ".mov",
+      ".avi",
+      ".mkv",
+      ".webm",
+      ".wav",
+      ".flac",
+      ".ogg"
+    ]);
+  }
+});
+
+// src/version.ts
+var VERSION;
+var init_version = __esm({
+  "src/version.ts"() {
+    VERSION = "0.1.5";
   }
 });
 
@@ -1028,7 +1130,7 @@ function createMcpServer(options = {}) {
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
   const server = new mcp_js.McpServer({
     name: "agent-redact",
-    version: "0.1.5"
+    version: VERSION
   });
   server.tool(
     "redact_text",
@@ -1301,6 +1403,7 @@ var init_server = __esm({
     init_engine();
     init_vault();
     init_files();
+    init_version();
     init_patterns();
     SAFE_WRITE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW ?? 0);
   }
@@ -1379,6 +1482,383 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
 }
 
 // src/cli/index.ts
+init_files();
+init_version();
+
+// src/cli/scan.ts
+init_files();
+var run = (args, cwd) => child_process.execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
+var splitNul = (buf) => buf.toString("utf8").split("\0").filter(Boolean);
+function isGitWorkTree(cwd) {
+  try {
+    return run(["rev-parse", "--is-inside-work-tree"], cwd).toString("utf8").trim() === "true";
+  } catch {
+    return false;
+  }
+}
+function gitListFiles(pathspec, cwd) {
+  return splitNul(run(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", pathspec], cwd));
+}
+function gitStagedFiles(cwd) {
+  return splitNul(run(["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"], cwd));
+}
+function gitRoot(cwd) {
+  return run(["rev-parse", "--show-toplevel"], cwd).toString("utf8").trim();
+}
+function gitStagedContent(path, repoRoot) {
+  return run(["show", `:${path}`], repoRoot);
+}
+
+// src/core/scan.ts
+init_engine();
+init_patterns();
+var IGNORE_LINE_RE = /agent-redact-ignore(?!-next-line)/;
+var IGNORE_NEXT_LINE_RE = /agent-redact-ignore-next-line/;
+function lineStarts(text) {
+  const starts = [0];
+  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) starts.push(i + 1);
+  return starts;
+}
+function positionAt(starts, offset) {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = lo + hi + 1 >> 1;
+    if (starts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return { line: lo + 1, column: offset - starts[lo] + 1 };
+}
+function fingerprintOf(patternId, file, secret) {
+  return crypto.createHash("sha256").update(`${patternId}\0${file}\0${secret}`).digest("hex").slice(0, 32);
+}
+function scanContent(content, file, options = {}) {
+  const { respectInlineIgnore = false, baseline, ...redactOptions } = options;
+  const result = redact(content, { ...redactOptions, reversible: false, includeMatchedText: true });
+  const starts = lineStarts(content);
+  const lineText = (line) => content.slice(starts[line - 1], (starts[line] ?? content.length + 1) - 1);
+  const findings = [];
+  const suppressed = { inline: 0, baseline: 0 };
+  for (const m of result.matches) {
+    const { line, column } = positionAt(starts, m.startIndex);
+    if (respectInlineIgnore && (IGNORE_LINE_RE.test(lineText(line)) || line > 1 && IGNORE_NEXT_LINE_RE.test(lineText(line - 1)))) {
+      suppressed.inline++;
+      continue;
+    }
+    const fingerprint = fingerprintOf(m.patternId, file, m.matchedText ?? "");
+    if (baseline?.has(fingerprint)) {
+      suppressed.baseline++;
+      continue;
+    }
+    findings.push({
+      file,
+      line,
+      column,
+      patternId: m.patternId,
+      patternName: m.patternName,
+      severity: m.severity,
+      category: m.category,
+      fingerprint
+    });
+  }
+  return { findings, suppressed };
+}
+function writeBaseline(path, findings) {
+  const data = {
+    tool: "agent-redact",
+    version: 1,
+    findings: findings.map(({ fingerprint, patternId, file, line }) => ({ fingerprint, patternId, file, line }))
+  };
+  fs.writeFileSync(path, JSON.stringify(data, null, 2) + "\n", "utf-8");
+}
+function loadBaseline(path) {
+  const data = JSON.parse(fs.readFileSync(path, "utf-8"));
+  if (data?.tool !== "agent-redact" || data.version !== 1 || !Array.isArray(data.findings)) {
+    throw new Error(`Invalid baseline file: ${path}`);
+  }
+  return new Set(data.findings.map((f) => String(f.fingerprint)));
+}
+var SECURITY_SEVERITY = { critical: "9.5", high: "8.0", medium: "5.5", low: "3.0" };
+var SARIF_LEVEL = {
+  critical: "error",
+  high: "error",
+  medium: "warning",
+  low: "note"
+};
+function toSarif(findings, toolVersion) {
+  const descriptions = new Map(DEFAULT_PATTERNS.map((p) => [p.id, p.description]));
+  const rules = /* @__PURE__ */ new Map();
+  for (const f of findings) {
+    if (rules.has(f.patternId)) continue;
+    rules.set(f.patternId, {
+      id: f.patternId,
+      name: f.patternName.replace(/[^A-Za-z0-9]+/g, ""),
+      shortDescription: { text: f.patternName },
+      fullDescription: { text: descriptions.get(f.patternId) ?? f.patternName },
+      defaultConfiguration: { level: SARIF_LEVEL[f.severity] },
+      properties: { "security-severity": SECURITY_SEVERITY[f.severity], tags: ["security", "secret", f.category] }
+    });
+  }
+  return {
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+    version: "2.1.0",
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: "agent-redact",
+            version: toolVersion,
+            informationUri: "https://github.com/TonyDuongg/agent-redact",
+            rules: [...rules.values()]
+          }
+        },
+        results: findings.map((f) => ({
+          ruleId: f.patternId,
+          level: SARIF_LEVEL[f.severity],
+          message: { text: `${f.patternName} detected (${f.severity}). The secret value is not included in this report.` },
+          locations: [
+            {
+              physicalLocation: {
+                artifactLocation: { uri: f.file, uriBaseId: "%SRCROOT%" },
+                region: { startLine: f.line, startColumn: f.column }
+              }
+            }
+          ],
+          partialFingerprints: { "agentRedact/v1": f.fingerprint }
+        }))
+      }
+    ]
+  };
+}
+
+// src/cli/scan.ts
+init_version();
+var DEFAULT_EXCLUDES = /* @__PURE__ */ new Set([
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  ".turbo",
+  ".next",
+  ".nuxt",
+  "vendor",
+  ".venv",
+  "venv",
+  "__pycache__"
+]);
+var toPosix = (p) => p.split("\\").join("/");
+function expandTargets(targets, cwd) {
+  const out = /* @__PURE__ */ new Set();
+  for (const target of targets) {
+    const abs = path.resolve(cwd, target);
+    let isDir;
+    try {
+      isDir = fs.statSync(abs).isDirectory();
+    } catch {
+      throw new Error(`Cannot read file: ${target}`);
+    }
+    if (!isDir) {
+      out.add(abs);
+    } else if (isGitWorkTree(abs)) {
+      for (const p of gitListFiles(".", abs)) out.add(path.join(abs, p));
+    } else {
+      for (const p of walkFiles(abs, DEFAULT_EXCLUDES)) out.add(p);
+    }
+  }
+  return [...out];
+}
+function runScan(req) {
+  const maxBytes = req.maxBytes ?? DEFAULT_MAX_SCAN_BYTES;
+  const baseline = req.baselineFile ? loadBaseline(path.resolve(req.cwd, req.baselineFile)) : void 0;
+  const scanOptions = { ...req.options, respectInlineIgnore: true, baseline };
+  const outcome = {
+    findings: [],
+    filesScanned: 0,
+    skipped: { binary: 0, "too-large": 0, unreadable: 0 },
+    suppressed: { inline: 0, baseline: 0 }
+  };
+  const record = (content, file) => {
+    const res = scanContent(content, file, scanOptions);
+    outcome.filesScanned++;
+    outcome.findings.push(...res.findings);
+    outcome.suppressed.inline += res.suppressed.inline;
+    outcome.suppressed.baseline += res.suppressed.baseline;
+  };
+  if (req.staged) {
+    const root = gitRoot(req.cwd);
+    for (const path$1 of gitStagedFiles(root)) {
+      let blob;
+      try {
+        blob = gitStagedContent(path$1, root);
+      } catch {
+        outcome.skipped.unreadable++;
+        continue;
+      }
+      if (blob.length > maxBytes) outcome.skipped["too-large"]++;
+      else if (blob.subarray(0, 8192).includes(0)) outcome.skipped.binary++;
+      else record(blob.toString("utf8"), toPosix(path.relative(req.cwd, path.join(root, path$1))));
+    }
+    return outcome;
+  }
+  for (const abs of expandTargets(req.targets, req.cwd)) {
+    const read = readTextForScan(abs, maxBytes);
+    if (!read.ok) {
+      outcome.skipped[read.reason]++;
+      continue;
+    }
+    record(read.content, toPosix(path.relative(req.cwd, abs)));
+  }
+  return outcome;
+}
+function writeScanBaseline(path, outcome) {
+  writeBaseline(path, outcome.findings);
+}
+function formatReport(outcome, format) {
+  if (format === "sarif") return JSON.stringify(toSarif(outcome.findings, VERSION), null, 2) + "\n";
+  return JSON.stringify(outcome, null, 2) + "\n";
+}
+function formatText(outcome, c) {
+  const lines = [];
+  for (const f of outcome.findings) {
+    lines.push(
+      `${c.yellow}\u2716 [LEAK]${c.reset} ${f.file}:${f.line}:${f.column}  ${f.patternName} (${f.severity.toUpperCase()})`
+    );
+  }
+  const notes = [];
+  const skipped = outcome.skipped.binary + outcome.skipped["too-large"] + outcome.skipped.unreadable;
+  if (skipped > 0) notes.push(`${skipped} skipped (binary/too large/unreadable)`);
+  if (outcome.suppressed.inline > 0) notes.push(`${outcome.suppressed.inline} ignored inline`);
+  if (outcome.suppressed.baseline > 0) notes.push(`${outcome.suppressed.baseline} in baseline`);
+  const suffix = notes.length > 0 ? ` ${c.gray}(${notes.join(", ")})${c.reset}` : "";
+  const filesWithFindings = new Set(outcome.findings.map((f) => f.file)).size;
+  lines.push(
+    outcome.findings.length > 0 ? `
+${c.red}[agent-redact] Audit failed: detected ${outcome.findings.length} secret(s) across ${filesWithFindings} of ${outcome.filesScanned} files.${c.reset}${suffix}` : `
+${c.green}[agent-redact] All ${outcome.filesScanned} files are clean.${c.reset}${suffix}`
+  );
+  return lines.join("\n");
+}
+
+// src/cli/hook.ts
+init_engine();
+init_files();
+var READER_RE = /(?:^|[\s;&|(`$])(?:cat|tac|head|tail|less|more|bat|nl|grep|egrep|fgrep|rg|ag|awk|gawk|sed|cut|sort|uniq|strings|xxd|od|hexdump|base64|jq|yq|type|Get-Content|gc|Select-String|findstr)(?=\s)/i;
+var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+var MAX_BASH_FILE_ARGS = 50;
+function summarize(text, options) {
+  const res = redact(text, { ...options, reversible: false });
+  const types = [...new Set(res.matches.map((m) => m.patternName))].join(", ");
+  return { count: res.totalLeaks, types };
+}
+function redactOptionsFor(cwd) {
+  let config = null;
+  try {
+    config = loadConfig(void 0, cwd);
+  } catch {
+  }
+  return {
+    include: config?.include,
+    exclude: config?.exclude,
+    allowlist: config?.allowlist,
+    customPatterns: config?.customPatterns,
+    detectHighEntropy: config?.detectHighEntropy ?? false,
+    entropy: config?.entropy
+  };
+}
+function fileSecrets(path$1, cwd, options) {
+  const abs = path.isAbsolute(path$1) ? path$1 : path.resolve(cwd, path$1);
+  try {
+    if (!fs.statSync(abs).isFile()) return null;
+  } catch {
+    return null;
+  }
+  const read = readTextForScan(abs);
+  if (!read.ok) return null;
+  const s = summarize(read.content, options);
+  return s.count > 0 ? s : null;
+}
+var str = (v) => typeof v === "string" ? v : "";
+function evaluateHook(input, options = {}) {
+  const cwd = input.cwd || process.cwd();
+  const redactOptions = redactOptionsFor(cwd);
+  const event = input.hook_event_name;
+  if (event === "UserPromptSubmit") {
+    const s2 = summarize(str(input.prompt), redactOptions);
+    return s2.count > 0 ? {
+      block: true,
+      message: `agent-redact blocked this prompt: it contains ${s2.count} secret(s) (${s2.types}). Remove them, or refer to them indirectly (for example "the key in .env") instead of pasting them.`
+    } : { block: false };
+  }
+  if (event !== "PreToolUse") return { block: false };
+  const tool = input.tool_name ?? "";
+  const toolInput = input.tool_input ?? {};
+  if (tool === "Read") {
+    const path = str(toolInput["file_path"]);
+    const s2 = path ? fileSecrets(path, cwd, redactOptions) : null;
+    return s2 ? {
+      block: true,
+      message: `agent-redact blocked reading ${path}: it contains ${s2.count} secret(s) (${s2.types}). Ask the user first, or use the agent-redact MCP tool scan_file to read a redacted copy.`
+    } : { block: false };
+  }
+  if (tool === "Bash") {
+    const command = str(toolInput["command"]);
+    const inline = summarize(command, redactOptions);
+    if (inline.count > 0) {
+      return {
+        block: true,
+        message: `agent-redact blocked this command: it contains ${inline.count} secret(s) (${inline.types}). Use an environment variable instead of the literal value.`
+      };
+    }
+    if (READER_RE.test(command)) {
+      const candidates = command.split(/[\s;&|()<>'"`=]+/).filter((t) => t && !t.startsWith("-")).slice(0, MAX_BASH_FILE_ARGS);
+      for (const token of candidates) {
+        const s2 = fileSecrets(token, cwd, redactOptions);
+        if (s2) {
+          return {
+            block: true,
+            message: `agent-redact blocked this command: it would print ${token}, which contains ${s2.count} secret(s) (${s2.types}). Ask the user first, or use the agent-redact MCP tool scan_file to read a redacted copy.`
+          };
+        }
+      }
+    }
+    return { block: false };
+  }
+  if (WRITE_TOOLS.has(tool)) {
+    if (!options.blockWrites) return { block: false };
+    const s2 = summarize(JSON.stringify(toolInput), redactOptions);
+    return s2.count > 0 ? { block: true, message: `agent-redact blocked ${tool}: the new content contains ${s2.count} secret(s) (${s2.types}).` } : { block: false };
+  }
+  const s = summarize(JSON.stringify(toolInput), redactOptions);
+  return s.count > 0 ? {
+    block: true,
+    message: `agent-redact blocked the ${tool} call: its input contains ${s.count} secret(s) (${s.types}).`
+  } : { block: false };
+}
+async function readAll(stream) {
+  let data = "";
+  stream.setEncoding("utf8");
+  for await (const chunk of stream) data += chunk;
+  return data;
+}
+async function runHook(args) {
+  const raw = await readAll(process.stdin);
+  let input;
+  try {
+    input = JSON.parse(raw);
+  } catch {
+    process.stderr.write("agent-redact hook: could not parse hook input JSON from stdin\n");
+    return 1;
+  }
+  const decision = evaluateHook(input, { blockWrites: args.includes("--block-writes") });
+  if (decision.block) {
+    process.stderr.write(`${decision.message}
+`);
+    return 2;
+  }
+  return 0;
+}
+
+// src/cli/index.ts
 function writeSecureFile(filePath, content) {
   fs.writeFileSync(filePath, content, { encoding: "utf-8", mode: 384 });
   try {
@@ -1400,13 +1880,23 @@ var colors = {
 };
 function printHelp() {
   const helpText = `
-${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.5${colors.reset}
-${colors.dim}Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents${colors.reset}
+${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v${VERSION}${colors.reset}
+${colors.dim}Secret & PII redactor for AI agents, LLM pipelines and CI${colors.reset}
 
 ${colors.bold}USAGE:${colors.reset}
   npx agent-redact <file> [options]         Redact secrets in a file
   cat log.txt | npx agent-redact [options]  Redact secrets from standard input (stdin)
+  npx agent-redact <dir|files...>           Scan (honours .gitignore in git repos); exit 1 on findings
+  npx agent-redact --staged                 Scan what is staged for commit (git index)
   npx agent-redact mcp                      Start Model Context Protocol (MCP) server
+  npx agent-redact hook [--block-writes]    Claude Code hook (reads hook JSON on stdin)
+
+${colors.bold}SCAN OPTIONS:${colors.reset}
+  --format <text|json|sarif>  Report format (json/sarif go to stdout or --report)
+  --report <file>             Write the json/sarif report to a file
+  --baseline <file>           Ignore findings recorded in a baseline file
+  --write-baseline <file>     Record current findings as accepted, then exit 0
+  Inline: add "agent-redact-ignore" to a line, or "agent-redact-ignore-next-line" above it
 
 ${colors.bold}OPTIONS:${colors.reset}
   -r, --reversible            Generate numbered session placeholders ([ANTHROPIC_API_KEY_1])
@@ -1435,14 +1925,14 @@ ${colors.bold}EXAMPLES:${colors.reset}
   console.log(helpText.trim());
 }
 async function readStdin() {
-  return new Promise((resolve3) => {
+  return new Promise((resolve5) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => {
       data += chunk;
     });
     process.stdin.on("end", () => {
-      resolve3(data);
+      resolve5(data);
     });
   });
 }
@@ -1453,15 +1943,28 @@ async function main() {
     await runMcpServer2();
     return;
   }
+  if (args[0] === "hook") {
+    process.exit(await runHook(args.slice(1)));
+  }
   if (args.includes("-h") || args.includes("--help")) {
     printHelp();
     process.exit(0);
   }
   if (args.includes("-v") || args.includes("--version")) {
-    console.log("agent-redact v0.1.5");
+    console.log(`agent-redact v${VERSION}`);
     process.exit(0);
   }
-  const VALUE_FLAGS = /* @__PURE__ */ new Set(["-o", "--output", "--vault-out", "--unmask", "--config"]);
+  const VALUE_FLAGS = /* @__PURE__ */ new Set([
+    "-o",
+    "--output",
+    "--vault-out",
+    "--unmask",
+    "--config",
+    "--format",
+    "--report",
+    "--baseline",
+    "--write-baseline"
+  ]);
   const BOOLEAN_FLAGS = /* @__PURE__ */ new Set([
     "-r",
     "--reversible",
@@ -1473,6 +1976,7 @@ async function main() {
     "--entropy",
     "--check",
     "--fail-on-leak",
+    "--staged",
     "-h",
     "--help",
     "-v",
@@ -1508,11 +2012,28 @@ async function main() {
   const unmaskVaultFile = unmaskIdx !== -1 && args[unmaskIdx + 1] ? args[unmaskIdx + 1] : void 0;
   const configIdx = args.indexOf("--config");
   const configPath = configIdx !== -1 && args[configIdx + 1] ? args[configIdx + 1] : void 0;
+  const valueAfter = (flag) => {
+    const index = args.indexOf(flag);
+    return { index, value: index !== -1 ? args[index + 1] : void 0 };
+  };
+  const formatArg = valueAfter("--format");
+  const reportArg = valueAfter("--report");
+  const baselineArg = valueAfter("--baseline");
+  const writeBaselineArg = valueAfter("--write-baseline");
+  const isStaged = args.includes("--staged");
   const skipIndices = /* @__PURE__ */ new Set();
   if (outputIdx !== -1) skipIndices.add(outputIdx + 1);
   if (vaultOutIdx !== -1) skipIndices.add(vaultOutIdx + 1);
   if (unmaskIdx !== -1) skipIndices.add(unmaskIdx + 1);
   if (configIdx !== -1) skipIndices.add(configIdx + 1);
+  for (const a of [formatArg, reportArg, baselineArg, writeBaselineArg]) {
+    if (a.index !== -1) skipIndices.add(a.index + 1);
+  }
+  const format = formatArg.value;
+  if (format !== void 0 && !["text", "json", "sarif"].includes(format)) {
+    console.error(`${colors.red}Error:${colors.reset} --format must be one of: text, json, sarif.`);
+    process.exit(2);
+  }
   let loadedConfig = null;
   try {
     loadedConfig = loadConfig(configPath);
@@ -1532,20 +2053,86 @@ async function main() {
     );
     process.exit(2);
   }
-  if (fileArgs.length > 1) {
-    if (unmaskVaultFile || outputFile || isJson) {
+  const isDirectoryArg = (p) => {
+    try {
+      return fs.statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+  const hasDirectory = fileArgs.some(isDirectoryArg);
+  const multiInput = fileArgs.length > 1 || hasDirectory;
+  if (multiInput && (unmaskVaultFile || outputFile || isJson)) {
+    console.error(
+      `${colors.red}Error:${colors.reset} Flags -o/--output, --unmask, and -j/--json cannot be used with multiple input files.`
+    );
+    process.exit(2);
+  }
+  const scanMode = isStaged || format !== void 0 || baselineArg.index !== -1 || writeBaselineArg.index !== -1 || multiInput && !isInplace;
+  if (scanMode) {
+    if (isInplace || isReversible || outputFile || unmaskVaultFile || isJson) {
       console.error(
-        `${colors.red}Error:${colors.reset} Flags -o/--output, --unmask, and -j/--json cannot be used with multiple input files.`
+        `${colors.red}Error:${colors.reset} -i, -r, -o, --unmask and --json cannot be combined with scan mode (directories, --staged, --format, --baseline, --write-baseline).`
       );
       process.exit(2);
     }
+    if (!isStaged && fileArgs.length === 0) {
+      console.error(`${colors.red}Error:${colors.reset} scan mode needs at least one file or directory (or --staged).`);
+      process.exit(2);
+    }
+    let outcome;
+    try {
+      outcome = runScan({
+        targets: fileArgs,
+        staged: isStaged,
+        baselineFile: writeBaselineArg.index !== -1 ? void 0 : baselineArg.value,
+        cwd: process.cwd(),
+        options: {
+          include: loadedConfig?.include,
+          exclude: loadedConfig?.exclude,
+          allowlist: loadedConfig?.allowlist,
+          customPatterns: loadedConfig?.customPatterns,
+          detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+          entropy: loadedConfig?.entropy
+        }
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`${colors.red}Error:${colors.reset} ${msg}`);
+      process.exit(1);
+    }
+    if (writeBaselineArg.value) {
+      writeScanBaseline(writeBaselineArg.value, outcome);
+      console.error(
+        `${colors.green}\u2714${colors.reset} Baseline with ${outcome.findings.length} finding(s) written to ${writeBaselineArg.value}`
+      );
+      process.exit(0);
+    }
+    if (format === "json" || format === "sarif") {
+      const report = formatReport(outcome, format);
+      if (reportArg.value) fs.writeFileSync(reportArg.value, report, "utf-8");
+      else process.stdout.write(report);
+    }
+    console.error(formatText(outcome, colors));
+    process.exit(outcome.findings.length > 0 ? 1 : 0);
+  }
+  if (multiInput) {
     let totalLeaksAcrossFiles = 0;
+    let inPlaceFiles;
+    try {
+      inPlaceFiles = expandTargets(fileArgs, process.cwd());
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`${colors.red}Error:${colors.reset} ${msg}`);
+      process.exit(1);
+    }
     const inputs = [];
-    for (const file of fileArgs) {
-      try {
-        inputs.push({ file, content: fs.readFileSync(file, "utf-8") });
-      } catch {
-        console.error(`${colors.red}Error:${colors.reset} Cannot read file: ${file}`);
+    for (const file of inPlaceFiles) {
+      const read = readTextForScan(file);
+      if (read.ok) {
+        inputs.push({ file, content: read.content });
+      } else if (read.reason === "unreadable" || !hasDirectory) {
+        console.error(`${colors.red}Error:${colors.reset} Cannot read file: ${path.relative(process.cwd(), file) || file}`);
         process.exit(1);
       }
     }
@@ -1567,31 +2154,25 @@ async function main() {
       console.error(`${colors.green}\u2714${colors.reset} Session vault saved to ${vaultOutFile}`);
     }
     for (const { file, res } of results) {
-      if (isInplace && res.hasLeaks) {
-        fs.writeFileSync(file, res.text, "utf-8");
-      }
+      const shown = path.relative(process.cwd(), file) || file;
       if (res.hasLeaks) {
+        fs.writeFileSync(file, res.text, "utf-8");
         totalLeaksAcrossFiles += res.totalLeaks;
-        console.error(
-          `${colors.yellow}\u2716 [LEAK]${colors.reset} ${file}: ${res.totalLeaks} secret(s) detected`
-        );
+        console.error(`${colors.yellow}\u2716 [LEAK]${colors.reset} ${shown}: ${res.totalLeaks} secret(s) redacted in place`);
       } else {
-        console.error(`${colors.green}\u2714 [CLEAN]${colors.reset} ${file}`);
+        console.error(`${colors.green}\u2714 [CLEAN]${colors.reset} ${shown}`);
       }
     }
-    if (totalLeaksAcrossFiles > 0 && (failOnLeak || !isInplace)) {
+    if (totalLeaksAcrossFiles > 0 && failOnLeak) {
       console.error(
         `
-${colors.red}[agent-redact] Audit failed: detected ${totalLeaksAcrossFiles} secret(s) across ${fileArgs.length} files.${colors.reset}`
+${colors.red}[agent-redact] Audit failed: detected ${totalLeaksAcrossFiles} secret(s) across ${results.length} files.${colors.reset}`
       );
       process.exit(1);
-    } else {
-      console.error(
-        `
-${colors.green}[agent-redact] All ${fileArgs.length} files ${isInplace ? "sanitized" : "are clean"}.${colors.reset}`
-      );
-      process.exit(0);
     }
+    console.error(`
+${colors.green}[agent-redact] All ${results.length} files sanitized.${colors.reset}`);
+    process.exit(0);
   }
   const fileArg = fileArgs[0];
   let content = "";
