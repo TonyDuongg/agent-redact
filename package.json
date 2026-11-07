@@ -29,8 +29,13 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
+    "!dist/action",
+    "!dist/cli/index.cjs",
+    "!dist/cli/index.d.cts",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20.0.0"

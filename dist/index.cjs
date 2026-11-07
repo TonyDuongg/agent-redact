@@ -1,5 +1,6 @@
 'use strict';
 
+var crypto = require('crypto');
 var stream = require('stream');
 var string_decoder = require('string_decoder');
 var fs = require('fs');
@@ -77,7 +78,9 @@ var privateKeyPattern = {
   name: "Private Key",
   category: "credential",
   severity: "critical",
-  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[\s\S]*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
+  // The body may not run past another BEGIN marker: without that, every unterminated
+  // BEGIN rescanned to the end of the input (quadratic on many BEGINs without END).
+  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:(?!-----BEGIN )[\s\S])*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
   placeholder: "PRIVATE_KEY",
   description: "RSA, OpenSSH, DSA, EC, Encrypted, or PGP private key certificate"
 };
@@ -236,6 +239,69 @@ var mailgunApiKeyPattern = {
   placeholder: "MAILGUN_API_KEY",
   description: "Mailgun API authentication key"
 };
+var openrouterApiKeyPattern = {
+  id: "openrouter-api-key",
+  name: "OpenRouter API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bsk-or-v1-[a-f0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: "OPENROUTER_API_KEY",
+  description: "OpenRouter API key (sk-or-v1-...)"
+};
+var groqApiKeyPattern = {
+  id: "groq-api-key",
+  name: "Groq API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bgsk_[A-Za-z0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: "GROQ_API_KEY",
+  description: "Groq API key (gsk_...)"
+};
+var xaiApiKeyPattern = {
+  id: "xai-api-key",
+  name: "xAI API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bxai-[A-Za-z0-9]{60,}(?![A-Za-z0-9_])/g,
+  placeholder: "XAI_API_KEY",
+  description: "xAI (Grok) API key (xai-...)"
+};
+var perplexityApiKeyPattern = {
+  id: "perplexity-api-key",
+  name: "Perplexity API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bpplx-[A-Za-z0-9]{32,}(?![A-Za-z0-9_])/g,
+  placeholder: "PERPLEXITY_API_KEY",
+  description: "Perplexity API key (pplx-...)"
+};
+var replicateApiTokenPattern = {
+  id: "replicate-api-token",
+  name: "Replicate API Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\br8_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: "REPLICATE_API_TOKEN",
+  description: "Replicate API token (r8_...)"
+};
+var huggingFaceOrgTokenPattern = {
+  id: "huggingface-org-token",
+  name: "Hugging Face Organization Token",
+  category: "credential",
+  severity: "high",
+  regex: /\bapi_org_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: "HUGGINGFACE_ORG_TOKEN",
+  description: "Hugging Face organization API token (api_org_...)"
+};
+var langsmithApiKeyPattern = {
+  id: "langsmith-api-key",
+  name: "LangSmith API Key",
+  category: "credential",
+  severity: "high",
+  regex: /\blsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}(?![A-Za-z0-9_])/g,
+  placeholder: "LANGSMITH_API_KEY",
+  description: "LangSmith / LangChain personal or service key (lsv2_pt_ / lsv2_sk_)"
+};
 var CREDENTIAL_PATTERNS = [
   anthropicApiKeyPattern,
   openaiApiKeyPattern,
@@ -261,7 +327,14 @@ var CREDENTIAL_PATTERNS = [
   azureStorageKeyPattern,
   gcpOauthSecretPattern,
   digitalOceanTokenPattern,
-  mailgunApiKeyPattern
+  mailgunApiKeyPattern,
+  openrouterApiKeyPattern,
+  groqApiKeyPattern,
+  xaiApiKeyPattern,
+  perplexityApiKeyPattern,
+  replicateApiTokenPattern,
+  huggingFaceOrgTokenPattern,
+  langsmithApiKeyPattern
 ];
 
 // src/patterns/pii.ts
@@ -270,7 +343,9 @@ var emailPattern = {
   name: "Email Address",
   category: "pii",
   severity: "medium",
-  regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // RFC 5321 length limits (local part 64, domain 253, label 63) keep matching linear;
+  // unbounded quantifiers backtracked quadratically on inputs like "a-a-a-..." (80KB took 10 s).
+  regex: /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b/g,
   placeholder: "EMAIL_ADDRESS",
   description: "Standard RFC 5322 email address"
 };
@@ -357,6 +432,75 @@ var PII_PATTERNS = [
   creditCardPattern
 ];
 
+// src/patterns/vn.ts
+function hasValidProvinceCode(id) {
+  const province = Number(id.slice(0, 3));
+  return province >= 1 && province <= 96;
+}
+var vnCitizenIdPattern = {
+  id: "vn-citizen-id",
+  name: "Vietnamese Citizen ID (CCCD)",
+  category: "pii",
+  severity: "high",
+  regex: /(?<![\w$])0\d{11}(?!\d)/g,
+  placeholder: "VN_CITIZEN_ID",
+  description: "12-digit Vietnamese citizen identity card number (CCCD) with a valid province code",
+  validator: hasValidProvinceCode
+};
+var vnIdNumberPattern = {
+  id: "vn-id-number",
+  name: "Vietnamese ID Number (CMND/CCCD, with context)",
+  category: "pii",
+  severity: "high",
+  regex: /(?:CMND|CCCD|CMT|căn cước|can cuoc|chứng minh|chung minh)(?:\s+(?:số|so|no\.?))?[\s:#.=-]*(\d{9}|\d{12})(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_ID_NUMBER",
+  description: "9-digit CMND or 12-digit CCCD number preceded by an ID keyword"
+};
+var vnTaxCodePattern = {
+  id: "vn-tax-code",
+  name: "Vietnamese Tax Code (MST)",
+  category: "pii",
+  severity: "medium",
+  regex: /(?:MST|mã số thuế|ma so thue|tax\s*code)[\s:#.=-]*(\d{10}(?:-\d{3})?)(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_TAX_CODE",
+  description: "10- or 13-digit Vietnamese tax code preceded by MST / m\xE3 s\u1ED1 thu\u1EBF"
+};
+var vnBankAccountPattern = {
+  id: "vn-bank-account",
+  name: "Vietnamese Bank Account Number",
+  category: "pii",
+  severity: "high",
+  regex: /(?:STK|số tài khoản|so tai khoan|tài khoản số|tai khoan so|account\s*(?:no\.?|number))[\s:#.=-]*(\d{6,20})(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_BANK_ACCOUNT",
+  description: "Bank account number preceded by STK / s\u1ED1 t\xE0i kho\u1EA3n / account number"
+};
+var VN_PII_PATTERNS = [
+  vnCitizenIdPattern,
+  vnIdNumberPattern,
+  vnTaxCodePattern,
+  vnBankAccountPattern
+];
+
+// src/patterns/presets.ts
+var PATTERN_PRESETS = {
+  "vn-pii": VN_PII_PATTERNS
+};
+function resolvePresets(names) {
+  if (!names || names.length === 0) return [];
+  const out = [];
+  for (const name of names) {
+    const preset = PATTERN_PRESETS[name];
+    if (!preset) {
+      throw new Error(`Unknown preset "${name}". Available presets: ${Object.keys(PATTERN_PRESETS).join(", ")}`);
+    }
+    out.push(...preset);
+  }
+  return out;
+}
+
 // src/patterns/index.ts
 var DEFAULT_PATTERNS = [
   ...CREDENTIAL_PATTERNS,
@@ -421,6 +565,13 @@ function createHighEntropyPattern(config = {}) {
 }
 
 // src/core/vault.ts
+function collectPlaceholderLiterals(text) {
+  const found = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(/\[[^[\]\r\n]{1,256}_\d+\]/g)) {
+    found.add(m[0]);
+  }
+  return found;
+}
 var Vault = class _Vault {
   placeholderToEntry = /* @__PURE__ */ new Map();
   placeholderToEntries = /* @__PURE__ */ new Map();
@@ -429,8 +580,30 @@ var Vault = class _Vault {
   maxEntries;
   /** Names (never values) of placeholders dropped by the size cap, oldest first */
   evictedPlaceholders = /* @__PURE__ */ new Set();
+  /** Bumped on every change to the placeholder set; invalidates the cached unmask regex */
+  mutations = 0;
+  unmaskRegexCache;
   constructor(options) {
     this.maxEntries = options?.maxEntries;
+  }
+  /**
+   * True when `prefix` is the beginning of at least one known placeholder.
+   * Used by streaming unmaskers to decide whether a chunk tail must be held back.
+   */
+  hasPlaceholderPrefix(prefix) {
+    for (const placeholder of this.placeholderToEntries.keys()) {
+      if (placeholder.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+  getUnmaskRegex() {
+    if (this.unmaskRegexCache?.mutations !== this.mutations) {
+      const escaped = Array.from(this.placeholderToEntries.keys()).sort((a, b) => b.length - a.length).map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+      this.unmaskRegexCache = { mutations: this.mutations, regex: new RegExp(escaped.join("|"), "g") };
+    }
+    const { regex } = this.unmaskRegexCache;
+    regex.lastIndex = 0;
+    return regex;
   }
   evictOldestIfNeeded() {
     if (this.maxEntries && this.originalToPlaceholder.size >= this.maxEntries) {
@@ -443,6 +616,7 @@ var Vault = class _Vault {
         }
         this.placeholderToEntry.delete(oldestPlaceholder);
         this.placeholderToEntries.delete(oldestPlaceholder);
+        this.mutations++;
         this.rememberEvicted(oldestPlaceholder);
       }
     }
@@ -478,7 +652,8 @@ var Vault = class _Vault {
     this.evictOldestIfNeeded();
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
-      while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
+      const isTaken = typeof existingText === "string" ? (p) => existingText.includes(p) : (p) => existingText.has(p);
+      while (isTaken(`[${pattern.placeholder}_${count}]`)) {
         count++;
       }
     }
@@ -494,6 +669,7 @@ var Vault = class _Vault {
     this.placeholderToEntry.set(placeholder, entry);
     this.placeholderToEntries.set(placeholder, [entry]);
     this.originalToPlaceholder.set(original, placeholder);
+    this.mutations++;
     return placeholder;
   }
   /**
@@ -506,29 +682,29 @@ var Vault = class _Vault {
    * Replaces all placeholders in a string back with their original secrets
    * in a deterministic, collision-free single regex pass. Handles multiple
    * secrets mapped to identical custom placeholders sequentially.
+   *
+   * @param encode Optional transform applied to each restored secret, e.g. JSON string
+   *   escaping when the placeholder sits inside a JSON document.
    */
-  unmask(text) {
+  unmask(text, encode) {
     if (this.placeholderToEntries.size === 0 || !text) {
       return text;
     }
-    const placeholders = Array.from(this.placeholderToEntries.keys()).sort(
-      (a, b) => b.length - a.length
-    );
-    const escaped = placeholders.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    const regex = new RegExp(escaped.join("|"), "g");
+    const regex = this.getUnmaskRegex();
     const occurrences = /* @__PURE__ */ new Map();
+    const out = (secret) => encode ? encode(secret) : secret;
     return text.replace(regex, (matched) => {
       const list = this.placeholderToEntries.get(matched);
       if (!list || list.length === 0) {
         return matched;
       }
       if (list.length === 1) {
-        return list[0].original;
+        return out(list[0].original);
       }
       const idx = occurrences.get(matched) ?? 0;
       occurrences.set(matched, idx + 1);
       const entry = list[idx % list.length];
-      return entry.original;
+      return out(entry.original);
     });
   }
   /**
@@ -545,6 +721,7 @@ var Vault = class _Vault {
     }
     this.placeholderToEntries.set(entry.placeholder, existingList);
     this.originalToPlaceholder.set(entry.original, entry.placeholder);
+    this.mutations++;
     const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
     if (match && match[1] && match[2]) {
       const prefix = match[1];
@@ -614,6 +791,7 @@ var Vault = class _Vault {
     this.originalToPlaceholder.clear();
     this.counters.clear();
     this.evictedPlaceholders.clear();
+    this.mutations++;
   }
 };
 
@@ -652,13 +830,14 @@ var RedactEngine = class {
     const startTime = performance.now();
     const reversible = options?.reversible ?? false;
     const vault = options?.vault ?? this.vault ?? (reversible ? new Vault() : void 0);
-    let activePatterns = options?.customPatterns ? [...this.patterns, ...options.customPatterns] : [...this.patterns];
+    const presetPatterns = resolvePresets(options?.presets);
+    let activePatterns = [...this.patterns, ...presetPatterns, ...options?.customPatterns ?? []];
     if (options?.detectHighEntropy) {
       activePatterns.push(createHighEntropyPattern(options.entropy));
     }
     if (options?.include && options.include.length > 0) {
       const includeSet = new Set(options.include);
-      const customIds = new Set((options.customPatterns ?? []).map((p) => p.id));
+      const customIds = new Set([...options.customPatterns ?? [], ...presetPatterns].map((p) => p.id));
       activePatterns = activePatterns.filter(
         (p) => includeSet.has(p.id) || customIds.has(p.id) || options.detectHighEntropy && p.id === "generic-high-entropy-secret"
       );
@@ -717,19 +896,22 @@ var RedactEngine = class {
       return a.startIndex - b.startIndex;
     });
     const accepted = [];
+    const covered = rawMatches.length > 1 ? new Uint8Array(text.length) : void 0;
     for (const candidate of rawMatches) {
-      const hasOverlap = accepted.some(
-        (acc) => candidate.startIndex < acc.endIndex && acc.startIndex < candidate.endIndex
-      );
-      if (!hasOverlap) {
-        accepted.push(candidate);
+      if (covered) {
+        if (covered.subarray(candidate.startIndex, candidate.endIndex).includes(1)) {
+          continue;
+        }
+        covered.fill(1, candidate.startIndex, candidate.endIndex);
       }
+      accepted.push(candidate);
     }
     accepted.sort((a, b) => a.startIndex - b.startIndex);
     const matches = [];
     const stats = {};
     let redactedText = "";
     let cursor = 0;
+    let literalPlaceholders;
     for (let i = 0; i < accepted.length; i++) {
       const m = accepted[i];
       let replacement;
@@ -756,7 +938,8 @@ var RedactEngine = class {
           });
         }
       } else if (reversible && vault) {
-        replacement = vault.getOrCreate(m.secret, m.pattern, text);
+        literalPlaceholders ??= collectPlaceholderLiterals(text);
+        replacement = vault.getOrCreate(m.secret, m.pattern, literalPlaceholders);
       } else {
         replacement = `[REDACTED_${m.pattern.placeholder}]`;
       }
@@ -826,6 +1009,68 @@ function redact(text, options) {
 }
 function unmask(text, vault) {
   return defaultEngine.unmask(text, vault);
+}
+var FORMAT = "agent-redact-vault";
+var VERSION = 1;
+var KDF = { name: "scrypt", N: 32768, r: 8, p: 1 };
+function headerAad(file) {
+  return Buffer.from(JSON.stringify([file.format, file.version, file.kdf, file.cipher]), "utf8");
+}
+var SCRYPT_MAXMEM = 64 * 1024 * 1024;
+function deriveKey(passphrase, salt) {
+  return crypto.scryptSync(passphrase.normalize("NFC"), salt, 32, { N: KDF.N, r: KDF.r, p: KDF.p, maxmem: SCRYPT_MAXMEM });
+}
+function hasExpectedKdf(kdf) {
+  const k = kdf;
+  return !!k && k["name"] === KDF.name && k["N"] === KDF.N && k["r"] === KDF.r && k["p"] === KDF.p && typeof k["salt"] === "string" && Buffer.from(k["salt"], "base64").length === 16;
+}
+function isEncryptedVault(content) {
+  try {
+    const parsed = JSON.parse(content);
+    return parsed?.format === FORMAT;
+  } catch {
+    return false;
+  }
+}
+function encryptVaultJson(json, passphrase) {
+  if (typeof passphrase !== "string" || passphrase.length === 0) {
+    throw new Error("A non-empty passphrase is required to encrypt a vault");
+  }
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const kdf = { ...KDF, salt: salt.toString("base64") };
+  const header = { format: FORMAT, version: VERSION, kdf, cipher: "aes-256-gcm" };
+  const cipher = crypto.createCipheriv("aes-256-gcm", deriveKey(passphrase, salt), iv);
+  cipher.setAAD(headerAad(header));
+  const data = Buffer.concat([cipher.update(json, "utf8"), cipher.final()]);
+  const file = {
+    ...header,
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    data: data.toString("base64")
+  };
+  return JSON.stringify(file, null, 2) + "\n";
+}
+function decryptVaultJson(content, passphrase) {
+  const fail = () => new Error("Cannot decrypt vault: wrong passphrase or corrupted file");
+  let file;
+  try {
+    file = JSON.parse(content);
+  } catch {
+    throw fail();
+  }
+  if (file?.format !== FORMAT || file.version !== VERSION || file.cipher !== "aes-256-gcm" || !hasExpectedKdf(file.kdf)) {
+    throw fail();
+  }
+  try {
+    const key = deriveKey(passphrase, Buffer.from(file.kdf.salt, "base64"));
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(file.iv, "base64"));
+    decipher.setAAD(headerAad(file));
+    decipher.setAuthTag(Buffer.from(file.tag, "base64"));
+    return Buffer.concat([decipher.update(Buffer.from(file.data, "base64")), decipher.final()]).toString("utf8");
+  } catch {
+    throw fail();
+  }
 }
 var PEM_BEGIN_PATTERN = /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/;
 var PEM_END_PATTERN = /-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:\r?\n)?/;
@@ -929,6 +1174,312 @@ var RedactTransformStream = class extends stream.Transform {
 function createRedactStream(options) {
   return new RedactTransformStream(options);
 }
+
+// src/core/deep.ts
+var isPlainObject = (v) => {
+  if (typeof v !== "object" || v === null) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+};
+function isToolUnmaskAllowed(policy, toolName) {
+  if (policy === true) return true;
+  if (typeof policy === "function") return policy(toolName);
+  return false;
+}
+var nameOf = (parent) => {
+  for (const k of ["name", "toolName", "tool_name"]) {
+    if (typeof parent[k] === "string") return parent[k];
+  }
+  return "";
+};
+function toolInputSlot(key, parent) {
+  const type = typeof parent["type"] === "string" ? parent["type"] : "";
+  if (key === "arguments" || key === "args" || key === "partial_json") return nameOf(parent);
+  if ((key === "input" || key === "parameters") && (/tool|function/i.test(type) || "toolName" in parent)) {
+    return nameOf(parent);
+  }
+  if (key === "delta" && /function_call_arguments/i.test(type)) return "";
+  return null;
+}
+var BASE64_RE = /^[A-Za-z0-9+/_-]*={0,2}$/;
+var TEXT_MIME_RE = /^(?:text\/|application\/(?:json|xml|yaml|x-yaml|toml|x-toml|javascript|ecmascript|x-sh|x-shellscript|sql|csv|x-ndjson)\b)|\+(?:json|xml)\b/i;
+function findBase64Payload(value, key, parent) {
+  const dataUrl = /^data:([^;,]*)((?:;[^;,]*)*);base64,/i.exec(value.slice(0, 512));
+  if (dataUrl) {
+    const head = dataUrl[0];
+    return { mime: dataUrl[1] || void 0, encoded: value.slice(head.length), rebuild: (e) => head + e };
+  }
+  if (key === "data" && parent && (parent["type"] === "base64" || "media_type" in parent || "mime_type" in parent)) {
+    const mime = parent["media_type"] ?? parent["mime_type"];
+    return { mime: typeof mime === "string" ? mime : void 0, encoded: value, rebuild: (e) => e };
+  }
+  return null;
+}
+function mapStrings(value, fn, skipProp, seen = /* @__PURE__ */ new WeakMap(), key, parent) {
+  if (typeof value === "string") return fn(value, key, parent);
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return seen.get(value);
+    const out = [];
+    seen.set(value, out);
+    for (const item of value) out.push(mapStrings(item, fn, skipProp, seen, key, parent));
+    return out;
+  }
+  if (isPlainObject(value)) {
+    if (seen.has(value)) return seen.get(value);
+    const out = {};
+    seen.set(value, out);
+    for (const [k, v] of Object.entries(value)) {
+      const decision = skipProp(k, value);
+      out[k] = decision === "skip" ? v : mapStrings(v, fn, decision === "all" ? () => void 0 : skipProp, seen, k, value);
+    }
+    return out;
+  }
+  return value;
+}
+function redactDeep(value, options = {}) {
+  const { vault = new Vault(), skipKeys = [], ...redactOptions } = options;
+  const reversible = redactOptions.reversible ?? true;
+  const skip = new Set(skipKeys);
+  const stats = {};
+  let totalLeaks = 0;
+  const scan = (s) => {
+    const res = redact(s, { ...redactOptions, reversible, vault });
+    totalLeaks += res.totalLeaks;
+    for (const [id, n] of Object.entries(res.stats)) stats[id] = (stats[id] ?? 0) + n;
+    return res.text;
+  };
+  const out = mapStrings(
+    value,
+    (s, key, parent) => {
+      const payload = findBase64Payload(s, key, parent);
+      if (payload) {
+        const compact = payload.encoded.replace(/\r?\n/g, "");
+        if (BASE64_RE.test(compact)) {
+          const bytes = Buffer.from(compact, "base64");
+          const textual = payload.mime !== void 0 && TEXT_MIME_RE.test(payload.mime) || !bytes.includes(0);
+          if (!textual) return s;
+          const decoded = bytes.toString("utf8");
+          const redacted = scan(decoded);
+          return redacted === decoded ? s : payload.rebuild(Buffer.from(redacted, "utf8").toString("base64"));
+        }
+      }
+      return scan(s);
+    },
+    (k) => skip.has(k) ? "skip" : void 0
+  );
+  return { value: out, vault, totalLeaks, stats };
+}
+function unmaskDeep(value, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
+  return mapStrings(
+    value,
+    (s) => vault.unmask(s),
+    (k, parent) => {
+      const tool = toolInputSlot(k, parent);
+      if (tool === null) return void 0;
+      return isToolUnmaskAllowed(policy, tool) ? "all" : "skip";
+    }
+  );
+}
+
+// src/core/unmask-stream.ts
+var jsonStringEscape = (secret) => JSON.stringify(secret).slice(1, -1);
+var StreamingUnmasker = class {
+  constructor(vault, encode) {
+    this.vault = vault;
+    this.encode = encode;
+  }
+  vault;
+  encode;
+  pending = "";
+  /** Feeds the next chunk and returns the text that is safe to emit now */
+  push(chunk) {
+    const text = this.pending + chunk;
+    this.pending = "";
+    const hold = this.holdStart(text);
+    if (hold === -1) {
+      return this.vault.unmask(text, this.encode);
+    }
+    this.pending = text.slice(hold);
+    return this.vault.unmask(text.slice(0, hold), this.encode);
+  }
+  /** Returns everything still buffered (call once the stream has ended) */
+  flush() {
+    const rest = this.pending;
+    this.pending = "";
+    return this.vault.unmask(rest, this.encode);
+  }
+  holdStart(text) {
+    const open = text.lastIndexOf("[");
+    if (open === -1) return -1;
+    const tail = text.slice(open);
+    if (tail.includes("]")) return -1;
+    return this.vault.hasPlaceholderPrefix(tail) ? open : -1;
+  }
+};
+async function* unmaskTextStream(source, vault) {
+  const unmasker = new StreamingUnmasker(vault);
+  for await (const chunk of source) {
+    const out = unmasker.push(String(chunk));
+    if (out) yield out;
+  }
+  const rest = unmasker.flush();
+  if (rest) yield rest;
+}
+var UnmaskTransformStream = class extends stream.Transform {
+  decoder = new string_decoder.StringDecoder("utf8");
+  unmasker;
+  constructor(vault) {
+    super();
+    this.unmasker = new StreamingUnmasker(vault);
+  }
+  _transform(chunk, _enc, callback) {
+    const text = typeof chunk === "string" ? chunk : this.decoder.write(chunk);
+    const out = this.unmasker.push(text);
+    if (out) this.push(out);
+    callback();
+  }
+  _flush(callback) {
+    const rest = this.unmasker.push(this.decoder.end()) + this.unmasker.flush();
+    if (rest) this.push(rest);
+    callback();
+  }
+};
+function createUnmaskStream(vault) {
+  return new UnmaskTransformStream(vault);
+}
+var ANTHROPIC_ENVELOPE_EVENTS = /* @__PURE__ */ new Set([
+  "message_start",
+  "content_block_start",
+  "content_block_stop",
+  "message_delta",
+  "message_stop",
+  "ping"
+]);
+var isObject = (v) => typeof v === "object" && v !== null;
+function getOrCreate(map, key, create) {
+  let value = map.get(key);
+  if (value === void 0) {
+    value = create();
+    map.set(key, value);
+  }
+  return value;
+}
+async function* unmaskAnthropicStream(events, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
+  const text = /* @__PURE__ */ new Map();
+  const json = /* @__PURE__ */ new Map();
+  const toolNames = /* @__PURE__ */ new Map();
+  function* flushBlock(index) {
+    const t = text.get(index)?.flush();
+    if (t) yield { type: "content_block_delta", index, delta: { type: "text_delta", text: t } };
+    const j = json.get(index)?.flush();
+    if (j) yield { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: j } };
+    text.delete(index);
+    json.delete(index);
+  }
+  for await (const event of events) {
+    const e = event;
+    if (isObject(e) && e["type"] === "content_block_start" && isObject(e["content_block"])) {
+      const block = e["content_block"];
+      if (block["type"] === "tool_use") toolNames.set(Number(e["index"] ?? 0), String(block["name"] ?? ""));
+    }
+    if (isObject(e) && e["type"] === "content_block_delta" && isObject(e["delta"])) {
+      const index = Number(e["index"] ?? 0);
+      const delta = e["delta"];
+      if (delta["type"] === "text_delta" && typeof delta["text"] === "string") {
+        const out = getOrCreate(text, index, () => new StreamingUnmasker(vault)).push(delta["text"]);
+        yield { ...e, delta: { ...delta, text: out } };
+        continue;
+      }
+      if (delta["type"] === "input_json_delta" && typeof delta["partial_json"] === "string") {
+        if (!isToolUnmaskAllowed(policy, toolNames.get(index) ?? "")) {
+          yield { ...e, delta: { ...delta } };
+          continue;
+        }
+        const out = getOrCreate(json, index, () => new StreamingUnmasker(vault, jsonStringEscape)).push(
+          delta["partial_json"]
+        );
+        yield { ...e, delta: { ...delta, partial_json: out } };
+        continue;
+      }
+    }
+    if (isObject(e) && e["type"] === "content_block_stop") {
+      yield* flushBlock(Number(e["index"] ?? 0));
+    }
+    if (isObject(e) && e["type"] === "message_stop") {
+      for (const index of /* @__PURE__ */ new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
+    }
+    if (isObject(e) && typeof e["type"] === "string" && ANTHROPIC_ENVELOPE_EVENTS.has(e["type"])) {
+      yield unmaskDeep(event, vault, { unmaskToolInputs: policy });
+    } else {
+      yield event;
+    }
+  }
+  for (const index of /* @__PURE__ */ new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
+}
+async function* unmaskOpenAIStream(chunks, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
+  const content = /* @__PURE__ */ new Map();
+  const args = /* @__PURE__ */ new Map();
+  const toolNames = /* @__PURE__ */ new Map();
+  for await (const chunk of chunks) {
+    const c = chunk;
+    if (!isObject(c) || !Array.isArray(c["choices"])) {
+      yield chunk;
+      continue;
+    }
+    const choices = c["choices"].map((choice) => {
+      if (!isObject(choice) || !isObject(choice["delta"])) return choice;
+      const index = Number(choice["index"] ?? 0);
+      const delta = { ...choice["delta"] };
+      const finished = choice["finish_reason"] != null;
+      if (typeof delta["content"] === "string" || finished && content.has(index)) {
+        const u = getOrCreate(content, index, () => new StreamingUnmasker(vault));
+        let out = typeof delta["content"] === "string" ? u.push(delta["content"]) : "";
+        if (finished) out += u.flush();
+        if (typeof delta["content"] === "string" || out) delta["content"] = out;
+      }
+      const toolCalls = Array.isArray(delta["tool_calls"]) ? [...delta["tool_calls"]] : [];
+      const mapped = toolCalls.map((tc) => {
+        if (!isObject(tc) || !isObject(tc["function"]) || typeof tc["function"]["arguments"] !== "string") {
+          return tc;
+        }
+        const key = `${index}:${Number(tc["index"] ?? 0)}`;
+        if (typeof tc["function"]["name"] === "string") toolNames.set(key, tc["function"]["name"]);
+        if (!isToolUnmaskAllowed(policy, toolNames.get(key) ?? "")) {
+          return { ...tc, function: { ...tc["function"] } };
+        }
+        const u = getOrCreate(args, key, () => new StreamingUnmasker(vault, jsonStringEscape));
+        return { ...tc, function: { ...tc["function"], arguments: u.push(tc["function"]["arguments"]) } };
+      });
+      if (finished) {
+        for (const [key, u] of args) {
+          if (!key.startsWith(`${index}:`)) continue;
+          const rest = u.flush();
+          if (rest) mapped.push({ index: Number(key.split(":")[1]), function: { arguments: rest } });
+          args.delete(key);
+        }
+        content.delete(index);
+      }
+      if (mapped.length > 0) delta["tool_calls"] = mapped;
+      return { ...choice, delta };
+    });
+    yield { ...c, choices };
+  }
+  const trailing = [];
+  for (const [index, u] of content) {
+    const rest = u.flush();
+    if (rest) trailing.push({ index, delta: { content: rest }, finish_reason: null });
+  }
+  for (const [key, u] of args) {
+    const rest = u.flush();
+    if (!rest) continue;
+    const [choiceIndex, toolIndex] = key.split(":").map(Number);
+    trailing.push({ index: choiceIndex, delta: { tool_calls: [{ index: toolIndex, function: { arguments: rest } }] }, finish_reason: null });
+  }
+  if (trailing.length > 0) yield { choices: trailing };
+}
 var DEFAULT_CONFIG_FILENAMES = [
   "agent-redact.config.json",
   ".agentredactrc.json",
@@ -988,6 +1539,12 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
     const raw = fs.readFileSync(targetPath, "utf-8");
     const parsed = JSON.parse(raw);
     const resolvedCustomPatterns = parsed.customPatterns?.map(resolveCustomPattern);
+    if (parsed.presets !== void 0) {
+      if (!Array.isArray(parsed.presets) || parsed.presets.some((p) => typeof p !== "string")) {
+        throw new Error('"presets" must be an array of preset names');
+      }
+      resolvePresets(parsed.presets);
+    }
     return {
       ...parsed,
       customPatterns: resolvedCustomPatterns
@@ -1000,7 +1557,7 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
 
 // src/middleware/universal.ts
 function wrapAgent(agentFn, options = {}) {
-  const { unmaskResponse = true, onLeakDetected, ...redactOptions } = options;
+  const { unmaskResponse = true, unmaskToolInputs, onLeakDetected, ...redactOptions } = options;
   return async (rawPrompt) => {
     const vault = new Vault();
     const redactResult = redact(rawPrompt, {
@@ -1016,11 +1573,35 @@ function wrapAgent(agentFn, options = {}) {
       });
     }
     const agentResponse = await agentFn(redactResult.text);
-    if (unmaskResponse && typeof agentResponse === "string") {
+    if (!unmaskResponse) {
+      return agentResponse;
+    }
+    if (typeof agentResponse === "string") {
       return unmask(agentResponse, vault);
     }
-    return agentResponse;
+    if (isAsyncGenerator(agentResponse)) {
+      return unmaskMixedStream(agentResponse, vault, unmaskToolInputs);
+    }
+    return unmaskDeep(agentResponse, vault, { unmaskToolInputs });
   };
+}
+function isAsyncGenerator(value) {
+  return typeof value === "object" && value !== null && value[Symbol.toStringTag] === "AsyncGenerator";
+}
+async function* unmaskMixedStream(source, vault, unmaskToolInputs) {
+  const unmasker = new StreamingUnmasker(vault);
+  for await (const item of source) {
+    if (typeof item === "string") {
+      const out = unmasker.push(item);
+      if (out) yield out;
+    } else {
+      const pending = unmasker.flush();
+      if (pending) yield pending;
+      yield unmaskDeep(item, vault, { unmaskToolInputs });
+    }
+  }
+  const rest = unmasker.flush();
+  if (rest) yield rest;
 }
 
 // src/middleware/express.ts
@@ -1086,9 +1667,13 @@ function createExpressMiddleware(options = {}) {
 exports.CREDENTIAL_PATTERNS = CREDENTIAL_PATTERNS;
 exports.DEFAULT_PATTERNS = DEFAULT_PATTERNS;
 exports.PATTERN_MAP = PATTERN_MAP;
+exports.PATTERN_PRESETS = PATTERN_PRESETS;
 exports.PII_PATTERNS = PII_PATTERNS;
 exports.RedactEngine = RedactEngine;
 exports.RedactTransformStream = RedactTransformStream;
+exports.StreamingUnmasker = StreamingUnmasker;
+exports.UnmaskTransformStream = UnmaskTransformStream;
+exports.VN_PII_PATTERNS = VN_PII_PATTERNS;
 exports.Vault = Vault;
 exports.anthropicApiKeyPattern = anthropicApiKeyPattern;
 exports.awsAccessKeyPattern = awsAccessKeyPattern;
@@ -1099,30 +1684,44 @@ exports.calculateShannonEntropy = calculateShannonEntropy;
 exports.createExpressMiddleware = createExpressMiddleware;
 exports.createHighEntropyPattern = createHighEntropyPattern;
 exports.createRedactStream = createRedactStream;
+exports.createUnmaskStream = createUnmaskStream;
 exports.creditCardPattern = creditCardPattern;
 exports.databaseUriPattern = databaseUriPattern;
 exports.databaseUrlPattern = databaseUrlPattern;
+exports.decryptVaultJson = decryptVaultJson;
 exports.digitalOceanTokenPattern = digitalOceanTokenPattern;
 exports.discordTokenPattern = discordTokenPattern;
 exports.emailPattern = emailPattern;
+exports.encryptVaultJson = encryptVaultJson;
 exports.gcpOauthSecretPattern = gcpOauthSecretPattern;
 exports.githubTokenPattern = githubTokenPattern;
 exports.gitlabTokenPattern = gitlabTokenPattern;
 exports.googleApiKeyPattern = googleApiKeyPattern;
+exports.groqApiKeyPattern = groqApiKeyPattern;
+exports.huggingFaceOrgTokenPattern = huggingFaceOrgTokenPattern;
 exports.huggingFaceTokenPattern = huggingFaceTokenPattern;
 exports.ipv4Pattern = ipv4Pattern;
 exports.ipv6Pattern = ipv6Pattern;
+exports.isEncryptedVault = isEncryptedVault;
 exports.isHighEntropyToken = isHighEntropyToken;
+exports.isToolUnmaskAllowed = isToolUnmaskAllowed;
+exports.jsonStringEscape = jsonStringEscape;
 exports.jwtTokenPattern = jwtTokenPattern;
+exports.langsmithApiKeyPattern = langsmithApiKeyPattern;
 exports.loadConfig = loadConfig;
 exports.mailgunApiKeyPattern = mailgunApiKeyPattern;
 exports.npmTokenPattern = npmTokenPattern;
 exports.openaiApiKeyPattern = openaiApiKeyPattern;
+exports.openrouterApiKeyPattern = openrouterApiKeyPattern;
 exports.parseRegexString = parseRegexString;
+exports.perplexityApiKeyPattern = perplexityApiKeyPattern;
 exports.phonePattern = phonePattern;
 exports.privateKeyPattern = privateKeyPattern;
 exports.redact = redact;
+exports.redactDeep = redactDeep;
+exports.replicateApiTokenPattern = replicateApiTokenPattern;
 exports.resolveCustomPattern = resolveCustomPattern;
+exports.resolvePresets = resolvePresets;
 exports.sendgridApiKeyPattern = sendgridApiKeyPattern;
 exports.slackTokenPattern = slackTokenPattern;
 exports.ssnPattern = ssnPattern;
@@ -1132,6 +1731,15 @@ exports.telegramBotTokenPattern = telegramBotTokenPattern;
 exports.twilioAccountSidPattern = twilioAccountSidPattern;
 exports.twilioApiKeyPattern = twilioApiKeyPattern;
 exports.unmask = unmask;
+exports.unmaskAnthropicStream = unmaskAnthropicStream;
+exports.unmaskDeep = unmaskDeep;
+exports.unmaskOpenAIStream = unmaskOpenAIStream;
+exports.unmaskTextStream = unmaskTextStream;
+exports.vnBankAccountPattern = vnBankAccountPattern;
+exports.vnCitizenIdPattern = vnCitizenIdPattern;
+exports.vnIdNumberPattern = vnIdNumberPattern;
+exports.vnTaxCodePattern = vnTaxCodePattern;
 exports.wrapAgent = wrapAgent;
+exports.xaiApiKeyPattern = xaiApiKeyPattern;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map
