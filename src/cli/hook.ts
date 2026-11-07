@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { redact } from '../core/engine.js';
 import { loadConfig } from '../core/config.js';
 import type { RedactOptions } from '../core/types.js';
-import { expandTargets } from './scan.js';
+import { expandTargets, UnverifiableTargetError } from './scan.js';
 
 /**
  * Claude Code hook integration (`agent-redact hook`).
@@ -160,7 +160,9 @@ function fileBlockMessage(what: string, path: string, check: Exclude<FileCheck, 
  * never skip a file that ripgrep would search. Patterns without '/' match the basename.
  */
 function simpleGlobToRegExp(glob: string): RegExp | null {
-  if (!/^[A-Za-z0-9._\-/*?{},@ ]+$/.test(glob)) return null;
+  // No whitespace (the tool may split it into several globs) and no leading/trailing '/'
+  // (anchoring / directory-only semantics): anything we would interpret differently is ignored
+  if (!/^[A-Za-z0-9._\-/*?{},@]+$/.test(glob) || glob.startsWith('/') || glob.endsWith('/')) return null;
   let re = '';
   let braceDepth = 0;
   for (let i = 0; i < glob.length; i++) {
@@ -204,7 +206,10 @@ function checkGrep(input: Record<string, unknown>, cwd: string, options: RedactO
   let files: string[];
   try {
     files = expandTargets([target], cwd, { excludeDirs: new Set(), includeBinaryExtensions: true });
-  } catch {
+  } catch (err: unknown) {
+    if (err instanceof UnverifiableTargetError) {
+      return { block: true, message: `agent-redact blocked Grep: ${err.message}. Narrow the path.` };
+    }
     return { block: false }; // path does not exist: grep itself will fail
   }
   if (globRe) {

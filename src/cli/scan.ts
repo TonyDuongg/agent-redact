@@ -44,6 +44,9 @@ const toPosix = (p: string) => p.split('\\').join('/');
  * .gitignore is honoured exactly as git does; elsewhere common build/dependency
  * directories are skipped. Throws `Cannot read file: <target>` for missing targets.
  */
+/** Thrown when part of a target could not be enumerated; callers must fail closed */
+export class UnverifiableTargetError extends Error {}
+
 export interface ExpandOptions {
   /** Directory names skipped outside git work trees (default: common build/dependency dirs) */
   excludeDirs?: ReadonlySet<string>;
@@ -75,7 +78,9 @@ export function expandTargets(targets: string[], cwd: string, options: ExpandOpt
           continue; // deleted in the working tree
         }
         if (childIsDir) {
-          if (depth < 8) visit(child, p, depth + 1);
+          // Fail closed: never silently skip a nested repository we cannot descend into
+          if (depth >= 8) throw new UnverifiableTargetError(`Submodules nested too deeply to verify: ${p}`);
+          visit(child, p, depth + 1);
         } else out.add(child);
       }
     } else {

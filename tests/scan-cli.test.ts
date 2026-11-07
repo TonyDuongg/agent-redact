@@ -304,7 +304,7 @@ describe('Claude Code hook', () => {
     writeFileSync(join(dir, '.env'), `AWS_KEY=${AWS}\n`);
     const grep = (glob: string) =>
       evaluateHook({ hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'x', path: dir, glob }, cwd: dir });
-    for (const glob of ['*.[t]s', '!.env', '*.ts\\', '[!a]*']) {
+    for (const glob of ['*.[t]s', '!.env', '*.ts\\', '[!a]*', '*.ts *.env', '/src/*.ts', 'src/', ' *.ts']) {
       expect(grep(glob).block, glob).toBe(true);
     }
   });

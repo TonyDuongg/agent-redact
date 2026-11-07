@@ -1664,6 +1664,8 @@ var DEFAULT_EXCLUDES = /* @__PURE__ */ new Set([
   "__pycache__"
 ]);
 var toPosix = (p) => p.split("\\").join("/");
+var UnverifiableTargetError = class extends Error {
+};
 function expandTargets(targets, cwd, options = {}) {
   const excludeDirs = options.excludeDirs ?? DEFAULT_EXCLUDES;
   const out = /* @__PURE__ */ new Set();
@@ -1686,7 +1688,8 @@ function expandTargets(targets, cwd, options = {}) {
           continue;
         }
         if (childIsDir) {
-          if (depth < 8) visit(child, p, depth + 1);
+          if (depth >= 8) throw new UnverifiableTargetError(`Submodules nested too deeply to verify: ${p}`);
+          visit(child, p, depth + 1);
         } else out.add(child);
       }
     } else {
@@ -1856,7 +1859,7 @@ function fileBlockMessage(what, path, check) {
   return `agent-redact blocked ${what} ${path}: it contains ${check.summary.count} secret(s) (${check.summary.types}). Ask the user first, or use the agent-redact MCP tool scan_file to read a redacted copy.`;
 }
 function simpleGlobToRegExp(glob) {
-  if (!/^[A-Za-z0-9._\-/*?{},@ ]+$/.test(glob)) return null;
+  if (!/^[A-Za-z0-9._\-/*?{},@]+$/.test(glob) || glob.startsWith("/") || glob.endsWith("/")) return null;
   let re = "";
   let braceDepth = 0;
   for (let i = 0; i < glob.length; i++) {
@@ -1888,7 +1891,10 @@ function checkGrep(input, cwd, options) {
   let files;
   try {
     files = expandTargets([target], cwd, { excludeDirs: /* @__PURE__ */ new Set(), includeBinaryExtensions: true });
-  } catch {
+  } catch (err) {
+    if (err instanceof UnverifiableTargetError) {
+      return { block: true, message: `agent-redact blocked Grep: ${err.message}. Narrow the path.` };
+    }
     return { block: false };
   }
   if (globRe) {
