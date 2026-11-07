@@ -88,6 +88,27 @@ def test_scan_requires_a_target() -> None:
 
 def test_missing_cli_raises_helpful_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AGENT_REDACT_CLI", raising=False)
-    monkeypatch.setattr(agent_redact.shutil, "which", lambda _name: None)
-    with pytest.raises(AgentRedactError, match="CLI not found"):
+    monkeypatch.setattr(agent_redact, "_safe_which", lambda _name: None)
+    with pytest.raises(AgentRedactError, match="not found"):
         redact("x")
+
+
+def test_relative_cli_override_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_REDACT_CLI", "dist/cli/index.js")
+    with pytest.raises(AgentRedactError, match="absolute path"):
+        redact("x")
+
+
+def test_safe_which_ignores_cwd_and_relative_path_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    planted = tmp_path / ("agent-redact.exe" if os.name == "nt" else "agent-redact")
+    planted.write_text("#!/bin/sh\necho pwned\n", encoding="utf-8")
+    planted.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", os.pathsep.join([".", "", str(tmp_path)]))
+    assert agent_redact._safe_which("agent-redact") is None  # noqa: SLF001
+
+
+def test_cli_command_never_uses_shims_or_npx() -> None:
+    cmd = agent_redact._cli_command()  # noqa: SLF001
+    assert os.path.basename(cmd[0]).lower().startswith("node")
+    assert cmd[1].endswith("index.js") and os.path.isabs(cmd[1])

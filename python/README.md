@@ -3,12 +3,14 @@
 Python bindings for [agent-redact](https://github.com/TonyDuongg/agent-redact). This is a thin, dependency-free wrapper around the Node.js CLI, so Python agents get exactly the same detection engine as the npm package.
 
 **Requirements:**
-- Python 3.9+
+- Python 3.10+
 - Node.js 20+
 - the CLI, from one of these (checked in order):
-  1. `AGENT_REDACT_CLI` pointing at it;
-  2. `npm install -g agent-redact`;
-  3. `npx` on `PATH`, which fetches the matching version.
+  1. `AGENT_REDACT_CLI` set to the **absolute** path of `dist/cli/index.js`;
+  2. a global `npm install -g agent-redact`;
+  3. npm next to `node`: the matching version is installed once into a private user cache (`--ignore-scripts`) and reused.
+
+The CLI is always started as `node <absolute path>`. It is never run through `.cmd`/`.bat` shims, through `npx`, or from a binary found in the current directory, so scanning an untrusted repository cannot hijack it.
 
 ```python
 from agent_redact import redact, scan, Session

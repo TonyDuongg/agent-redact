@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `redact()` returns text plus matches, without secret values.
   - `scan()` covers paths or the git index.
   - `Session` provides reversible masking across calls. Its vault is encrypted with a random per-session passphrase that never touches disk, and is deleted on close.
-- **CLI discovery:** `AGENT_REDACT_CLI`, then a global `agent-redact`, then `npx agent-redact@<same version>`.
+- **CLI discovery** (hardened after automated security review): an absolute `AGENT_REDACT_CLI`, then a global `agent-redact` resolved to its JS entry, then a one-time `npm install --ignore-scripts` of the same version into a private user cache. The CLI is always started as `node <absolute path>`. `.cmd`/`.bat` shims and `npx` are never used, and executables are never taken from the current directory or relative `PATH` entries, so a scanned repository cannot plant a binary or an `.npmrc`. Python 3.10+ (3.9 is EOL and no longer available on CI runners).
 - **CI:** new Python job (Ubuntu and Windows, Python 3.9 and 3.13). A test keeps the Python version in sync with `package.json`.
 - **New CLI flags:** `--vault-in <file>` continues an existing (encrypted) vault, so numbering carries over between runs; `--preset <a,b>` enables presets from the command line.
 

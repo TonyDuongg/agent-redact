@@ -426,7 +426,7 @@ Some MCP clients start servers with an unexpected working directory (for example
 
 ### 8. Python Agents (LangChain, CrewAI, AutoGen) & Other Languages
 
-The `agent-redact` Python package (in [`python/`](python/)) wraps the CLI, so Python code gets the same engine with no Python dependencies. It needs Node.js 20+; the CLI is found via `AGENT_REDACT_CLI`, a global `npm i -g agent-redact`, or `npx`.
+The `agent-redact` Python package (in [`python/`](python/)) wraps the CLI, so Python code gets the same engine with no Python dependencies. It needs Node.js 20+. The CLI is found via an absolute `AGENT_REDACT_CLI`, a global `npm i -g agent-redact`, or a one-time install into a private user cache. It is always started as `node <absolute path>`, never via shims, `npx` or the current directory.
 
 ```python
 from agent_redact import redact, scan, Session

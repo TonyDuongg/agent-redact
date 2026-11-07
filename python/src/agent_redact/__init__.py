@@ -4,9 +4,13 @@ This package is a thin, dependency-free wrapper around the agent-redact Node.js 
 Python agents (LangChain, CrewAI, AutoGen, plain SDK code) get exactly the same detection
 engine as the npm package. It needs Node.js 20+ and one of:
 
-* ``AGENT_REDACT_CLI`` pointing at the CLI (an executable, or ``dist/cli/index.js``),
-* ``agent-redact`` on ``PATH`` (``npm install -g agent-redact``), or
-* ``npx`` on ``PATH`` (the matching version is fetched on first use).
+* ``AGENT_REDACT_CLI`` set to the absolute path of ``dist/cli/index.js`` (or an executable),
+* a global ``npm install -g agent-redact``, or
+* npm next to ``node``: the matching version is installed once into a private user cache
+  (with ``--ignore-scripts``) and reused.
+
+The CLI is always started as ``node <absolute path>``: never through ``.cmd``/``.bat`` shims,
+``npx``, or a binary found in the current directory.
 
 Secret values are never written to disk in plaintext: :class:`Session` keeps its vault
 encrypted with a random per-session passphrase that only lives in this process.
@@ -83,26 +87,117 @@ class Finding:
     fingerprint: str
 
 
+_NOT_FOUND = (
+    "agent-redact CLI not found. Install Node.js 20+ and run `npm install -g agent-redact`, "
+    "or set AGENT_REDACT_CLI to the absolute path of dist/cli/index.js."
+)
+
+
+def _safe_which(name: str) -> str | None:
+    """Like shutil.which, but only searches absolute PATH entries and never the current
+    directory (Windows searches cwd first by default; a scanned repo could plant a binary)."""
+    cwd = os.path.realpath(os.getcwd())
+    exts = [""]
+    if os.name == "nt":
+        exts = [e.lower() for e in os.environ.get("PATHEXT", ".EXE").split(os.pathsep) if e] + [""]
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry or not os.path.isabs(entry) or os.path.realpath(entry) == cwd:
+            continue
+        for ext in exts:
+            candidate = os.path.join(entry, name + ext)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    return None
+
+
+def _node() -> str:
+    node = _safe_which("node")
+    if not node:
+        raise AgentRedactError("`node` (Node.js 20+) was not found on PATH. " + _NOT_FOUND)
+    return node
+
+
+def _global_cli_js() -> str | None:
+    """Resolve the JS entry of a global `npm i -g agent-redact` without running npm's shims."""
+    shim = _safe_which("agent-redact")
+    if not shim:
+        return None
+    real = os.path.realpath(shim)  # POSIX: the bin is a symlink to dist/cli/index.js
+    if real.endswith(".js") and os.path.isfile(real):
+        return real
+    # Windows: <prefix>\agent-redact.cmd sits next to <prefix>\node_modules\agent-redact
+    candidate = os.path.join(os.path.dirname(shim), "node_modules", "agent-redact", "dist", "cli", "index.js")
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _cache_root() -> str:
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "agent-redact", "cli")
+
+
+def _cached_cli_js() -> str:
+    """Install the matching CLI once into a private cache (no install scripts) and reuse it.
+
+    npm is run through its own JS entry with the cache directory as cwd, never inside a
+    caller-controlled directory, so a project's .npmrc cannot redirect the install.
+    """
+    target = os.path.join(_cache_root(), __version__)
+    entry = os.path.join(target, "node_modules", "agent-redact", "dist", "cli", "index.js")
+    if os.path.isfile(entry):
+        return entry
+    node = _node()
+    node_dir = os.path.dirname(node)
+    npm_cli = next(
+        (
+            p
+            for p in (
+                os.path.join(node_dir, "node_modules", "npm", "bin", "npm-cli.js"),  # Windows layout
+                os.path.join(node_dir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),  # POSIX
+            )
+            if os.path.isfile(p)
+        ),
+        None,
+    )
+    if not npm_cli:
+        raise AgentRedactError(_NOT_FOUND)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    staging = tempfile.mkdtemp(prefix=f"{__version__}-", dir=os.path.dirname(target))
+    proc = subprocess.run(
+        [node, npm_cli, "install", "--prefix", staging, "--no-audit", "--no-fund", "--ignore-scripts",
+         "--userconfig", os.devnull, f"agent-redact@{__version__}"],
+        cwd=staging,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if proc.returncode != 0:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise AgentRedactError(f"could not install agent-redact@{__version__}: {proc.stderr.strip()}")
+    try:
+        os.replace(staging, target)  # atomic publish; a concurrent installer may have won
+    except OSError:
+        shutil.rmtree(staging, ignore_errors=True)
+    if not os.path.isfile(entry):
+        raise AgentRedactError(_NOT_FOUND)
+    return entry
+
+
 def _cli_command() -> list[str]:
+    """Always `node <absolute path to dist/cli/index.js>`: never a .cmd/.bat shim, never npx,
+    never a relative path that could resolve inside an untrusted working directory."""
     explicit = os.environ.get("AGENT_REDACT_CLI")
     if explicit:
+        if not os.path.isabs(explicit):
+            raise AgentRedactError("AGENT_REDACT_CLI must be an absolute path")
         if explicit.endswith((".js", ".mjs", ".cjs")):
-            node = shutil.which("node")
-            if not node:
-                raise AgentRedactError("AGENT_REDACT_CLI points at a .js file but `node` is not on PATH")
-            return [node, explicit]
+            return [_node(), explicit]
         return [explicit]
-    installed = shutil.which("agent-redact")
-    if installed:
-        return [installed]
-    npx = shutil.which("npx")
-    if npx:
-        # Pin the CLI to this package's version so results are reproducible
-        return [npx, "--yes", f"agent-redact@{__version__}"]
-    raise AgentRedactError(
-        "agent-redact CLI not found. Install Node.js 20+ and run `npm install -g agent-redact`, "
-        "or set AGENT_REDACT_CLI to the CLI path."
-    )
+    js = _global_cli_js() or _cached_cli_js()
+    return [_node(), js]
 
 
 def _run(
