@@ -10,13 +10,14 @@ import {
   closeSync,
   fchmodSync,
   statSync,
-  readSync,
   constants as fsConstants
 } from 'node:fs';
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
+import { isBinaryFile, DEFAULT_MAX_SCAN_BYTES } from '../core/files.js';
+import { VERSION } from '../version.js';
 import { DEFAULT_PATTERNS } from '../patterns/index.js';
 
 export interface McpServerOptions {
@@ -151,7 +152,7 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
 
   const server = new McpServer({
     name: 'agent-redact',
-    version: '0.1.5'
+    version: VERSION
   });
 
   // Tool 1: redact_text
@@ -304,9 +305,8 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
         };
       }
 
-      const MAX_SCAN_BYTES = 5 * 1024 * 1024; // 5 MB cap
       const fileStat = statSync(resolvedFile);
-      if (fileStat.size > MAX_SCAN_BYTES) {
+      if (fileStat.size > DEFAULT_MAX_SCAN_BYTES) {
         return {
           isError: true,
           content: [
@@ -320,15 +320,7 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
 
       // Skip binary files to prevent corrupting non-text data and leaking raw bytes
       if (fileStat.size > 0) {
-        const checkBytes = Math.min(8192, fileStat.size);
-        const buf = Buffer.alloc(checkBytes);
-        const fd = openSync(resolvedFile, 'r');
-        try {
-          readSync(fd, buf, 0, checkBytes, 0);
-        } finally {
-          closeSync(fd);
-        }
-        if (buf.includes(0)) {
+        if (isBinaryFile(resolvedFile)) {
           return {
             isError: true,
             content: [
