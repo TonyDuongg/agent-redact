@@ -1,6 +1,18 @@
 import type { RedactPattern, VaultEntry } from './types.js';
 
 /**
+ * Collects every "[NAME_<number>]" token already present in `text`, so new placeholders
+ * never collide with literal text. One linear pass per document.
+ */
+export function collectPlaceholderLiterals(text: string): Set<string> {
+  const found = new Set<string>();
+  for (const m of text.matchAll(/\[[^[\]\r\n]{1,256}_\d+\]/g)) {
+    found.add(m[0]);
+  }
+  return found;
+}
+
+/**
  * Vault manages session-scoped mappings between sensitive tokens
  * and their reversible placeholders.
  */
@@ -12,9 +24,36 @@ export class Vault {
   private maxEntries?: number;
   /** Names (never values) of placeholders dropped by the size cap, oldest first */
   private evictedPlaceholders = new Set<string>();
+  /** Bumped on every change to the placeholder set; invalidates the cached unmask regex */
+  private mutations = 0;
+  private unmaskRegexCache?: { mutations: number; regex: RegExp };
 
   constructor(options?: { maxEntries?: number }) {
     this.maxEntries = options?.maxEntries;
+  }
+
+  /**
+   * True when `prefix` is the beginning of at least one known placeholder.
+   * Used by streaming unmaskers to decide whether a chunk tail must be held back.
+   */
+  public hasPlaceholderPrefix(prefix: string): boolean {
+    for (const placeholder of this.placeholderToEntries.keys()) {
+      if (placeholder.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
+  private getUnmaskRegex(): RegExp {
+    if (this.unmaskRegexCache?.mutations !== this.mutations) {
+      // Longest first so a placeholder that is a prefix of another never wins
+      const escaped = Array.from(this.placeholderToEntries.keys())
+        .sort((a, b) => b.length - a.length)
+        .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      this.unmaskRegexCache = { mutations: this.mutations, regex: new RegExp(escaped.join('|'), 'g') };
+    }
+    const { regex } = this.unmaskRegexCache;
+    regex.lastIndex = 0;
+    return regex;
   }
 
   private evictOldestIfNeeded(): void {
@@ -30,6 +69,7 @@ export class Vault {
         }
         this.placeholderToEntry.delete(oldestPlaceholder);
         this.placeholderToEntries.delete(oldestPlaceholder);
+        this.mutations++;
         this.rememberEvicted(oldestPlaceholder);
       }
     }
@@ -61,7 +101,11 @@ export class Vault {
    * for the given secret token. Optionally ensures placeholder does not collide
    * with literal text already in the document.
    */
-  public getOrCreate(original: string, pattern: RedactPattern, existingText?: string): string {
+  public getOrCreate(
+    original: string,
+    pattern: RedactPattern,
+    existingText?: string | ReadonlySet<string>
+  ): string {
     const existing = this.originalToPlaceholder.get(original);
     if (existing) {
       return existing;
@@ -71,7 +115,13 @@ export class Vault {
 
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
-      while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
+      // A Set of literal placeholder-shaped tokens (see collectPlaceholderLiterals) avoids
+      // rescanning the whole document for every new secret, which was quadratic.
+      const isTaken =
+        typeof existingText === 'string'
+          ? (p: string) => existingText.includes(p)
+          : (p: string) => existingText.has(p);
+      while (isTaken(`[${pattern.placeholder}_${count}]`)) {
         count++;
       }
     }
@@ -90,6 +140,7 @@ export class Vault {
     this.placeholderToEntry.set(placeholder, entry);
     this.placeholderToEntries.set(placeholder, [entry]);
     this.originalToPlaceholder.set(original, placeholder);
+    this.mutations++;
 
     return placeholder;
   }
@@ -105,22 +156,20 @@ export class Vault {
    * Replaces all placeholders in a string back with their original secrets
    * in a deterministic, collision-free single regex pass. Handles multiple
    * secrets mapped to identical custom placeholders sequentially.
+   *
+   * @param encode Optional transform applied to each restored secret, e.g. JSON string
+   *   escaping when the placeholder sits inside a JSON document.
    */
-  public unmask(text: string): string {
+  public unmask(text: string, encode?: (secret: string) => string): string {
     if (this.placeholderToEntries.size === 0 || !text) {
       return text;
     }
 
-    // Sort placeholders by length descending to prevent substring collisions
-    const placeholders = Array.from(this.placeholderToEntries.keys()).sort(
-      (a, b) => b.length - a.length
-    );
-
-    // Escape regex characters (e.g. [ and ])
-    const escaped = placeholders.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const regex = new RegExp(escaped.join('|'), 'g');
-
+    // Cached between calls (rebuilt only when the vault changes): streaming unmaskers call
+    // this once per chunk, and rebuilding a large alternation every time was wasteful.
+    const regex = this.getUnmaskRegex();
     const occurrences = new Map<string, number>();
+    const out = (secret: string) => (encode ? encode(secret) : secret);
 
     return text.replace(regex, (matched) => {
       const list = this.placeholderToEntries.get(matched);
@@ -128,12 +177,12 @@ export class Vault {
         return matched;
       }
       if (list.length === 1) {
-        return list[0]!.original;
+        return out(list[0]!.original);
       }
       const idx = occurrences.get(matched) ?? 0;
       occurrences.set(matched, idx + 1);
       const entry = list[idx % list.length]!;
-      return entry.original;
+      return out(entry.original);
     });
   }
 
@@ -152,6 +201,7 @@ export class Vault {
     }
     this.placeholderToEntries.set(entry.placeholder, existingList);
     this.originalToPlaceholder.set(entry.original, entry.placeholder);
+    this.mutations++;
 
     // Synchronize counter to prevent future collision
     const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
@@ -237,6 +287,7 @@ export class Vault {
     this.originalToPlaceholder.clear();
     this.counters.clear();
     this.evictedPlaceholders.clear();
+    this.mutations++;
   }
 }
 

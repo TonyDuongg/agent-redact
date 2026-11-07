@@ -1,20 +1,9 @@
-import { readdirSync, statSync, readFileSync, appendFileSync, existsSync } from 'node:fs';
-import { join, relative, extname } from 'node:path';
-import { redact } from '../core/engine.js';
+import { statSync, appendFileSync, existsSync, writeFileSync } from 'node:fs';
+import { relative } from 'node:path';
 import { loadConfig } from '../core/config.js';
-import type { RedactMatch } from '../core/types.js';
-
-interface FileLeakRecord {
-  file: string;
-  line: number;
-  match: RedactMatch;
-}
-
-const BINARY_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.svg',
-  '.wasm', '.zip', '.tar', '.gz', '.7z', '.exe', '.dll',
-  '.so', '.dylib', '.pdf', '.docx', '.xlsx', '.bin', '.dat'
-]);
+import { walkFiles, readTextForScan, DEFAULT_MAX_SCAN_BYTES } from '../core/files.js';
+import { scanContent, loadBaseline, toSarif, type Finding } from '../core/scan.js';
+import { VERSION } from '../version.js';
 
 function getInput(name: string, fallback: string = ''): string {
   const keyWithUnderscore = `INPUT_${name.replace(/-/g, '_').toUpperCase()}`;
@@ -37,37 +26,6 @@ function writeSummary(markdown: string): void {
   }
 }
 
-function collectFiles(
-  dir: string,
-  excludeDirs: Set<string>,
-  result: string[] = []
-): string[] {
-  try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name.startsWith('.') && entry.name !== '.' && entry.name !== '..') {
-        if (entry.name === '.git') continue;
-      }
-
-      const fullPath = join(dir, entry.name);
-
-      if (entry.isDirectory()) {
-        if (!excludeDirs.has(entry.name)) {
-          collectFiles(fullPath, excludeDirs, result);
-        }
-      } else if (entry.isFile()) {
-        const ext = extname(entry.name).toLowerCase();
-        if (!BINARY_EXTENSIONS.has(ext)) {
-          result.push(fullPath);
-        }
-      }
-    }
-  } catch {
-    // skip unreadable directories
-  }
-  return result;
-}
-
 /** Escaping rules for GitHub workflow command data and properties (see @actions/core) */
 function escapeCommandData(value: string): string {
   return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
@@ -75,10 +33,6 @@ function escapeCommandData(value: string): string {
 
 function escapeCommandProperty(value: string): string {
   return escapeCommandData(value).replace(/:/g, '%3A').replace(/,/g, '%2C');
-}
-
-function calculateLineNumber(content: string, index: number): number {
-  return content.slice(0, index).split('\n').length;
 }
 
 export async function runAction(): Promise<void> {
@@ -94,62 +48,96 @@ export async function runAction(): Promise<void> {
   const excludeDirs = new Set(
     excludeInput.split(',').map((s) => s.trim()).filter(Boolean)
   );
+  const maxFileSizeMb = Number(getInput('max-file-size', '5'));
+  const maxBytes =
+    Number.isFinite(maxFileSizeMb) && maxFileSizeMb > 0
+      ? Math.floor(maxFileSizeMb * 1024 * 1024)
+      : DEFAULT_MAX_SCAN_BYTES;
 
   console.log(`[agent-redact] Starting security scan on: ${scanPath}`);
   console.log(`[agent-redact] Fail on leak: ${failOnLeak} | Entropy detection: ${detectEntropy}`);
 
   const loadedConfig = loadConfig(configPath);
+  const baselinePath = getInput('baseline') || undefined;
+  const baseline = baselinePath ? loadBaseline(baselinePath) : undefined;
+  const sarifPath = getInput('sarif-file') || undefined;
   const filesToScan: string[] = [];
 
   const stat = statSync(scanPath);
   if (stat.isFile()) {
     filesToScan.push(scanPath);
   } else {
-    collectFiles(scanPath, excludeDirs, filesToScan);
+    walkFiles(scanPath, excludeDirs, filesToScan);
   }
 
   console.log(`[agent-redact] Discovered ${filesToScan.length} text files to analyze.`);
 
-  const allLeaks: FileLeakRecord[] = [];
+  const allLeaks: Finding[] = [];
+  const suppressed = { inline: 0, baseline: 0 };
+  const skipped: Record<'binary' | 'too-large' | 'unreadable', number> = {
+    binary: 0,
+    'too-large': 0,
+    unreadable: 0
+  };
   const startTime = performance.now();
 
   for (const filePath of filesToScan) {
-    let content: string;
-    try {
-      content = readFileSync(filePath, 'utf-8');
-    } catch {
+    // Content sniffing catches binaries with unlisted extensions (.woff2, .mp4, no extension…),
+    // and the size cap keeps large blobs out of memory
+    const read = readTextForScan(filePath, maxBytes);
+    if (!read.ok) {
+      skipped[read.reason]++;
       continue;
     }
-
-    const result = redact(content, {
+    const relPath = relative(process.cwd(), filePath).replace(/\\/g, '/');
+    // Line numbers come from a line-start index (the old slice/split per finding was O(n·m));
+    // inline agent-redact-ignore comments and the optional baseline are honoured
+    const result = scanContent(read.content, relPath, {
       include: loadedConfig?.include,
       exclude: loadedConfig?.exclude,
       allowlist: loadedConfig?.allowlist,
       customPatterns: loadedConfig?.customPatterns,
       detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
-      entropy: loadedConfig?.entropy
+      entropy: loadedConfig?.entropy,
+      respectInlineIgnore: true,
+      baseline
     });
+    suppressed.inline += result.suppressed.inline;
+    suppressed.baseline += result.suppressed.baseline;
 
-    if (result.hasLeaks) {
-      const relPath = relative(process.cwd(), filePath);
-      for (const match of result.matches) {
-        const line = calculateLineNumber(content, match.startIndex);
-        allLeaks.push({ file: relPath, line, match });
-
-        // Emit GitHub annotation for PR diffs
-        // Unescaped ',' or ':' in a path would corrupt the annotation's properties
-        const annotationPath = escapeCommandProperty(relPath.replace(/\\/g, '/'));
-        const message = escapeCommandData(
-          `[agent-redact] Leaked ${match.patternName} (${match.severity.toUpperCase()}) detected!`
-        );
-        console.log(`::error file=${annotationPath},line=${line}::${message}`);
-      }
+    for (const finding of result.findings) {
+      allLeaks.push(finding);
+      // Emit GitHub annotation for PR diffs.
+      // Unescaped ',' or ':' in a path would corrupt the annotation's properties
+      const annotationPath = escapeCommandProperty(finding.file);
+      const message = escapeCommandData(
+        `[agent-redact] Leaked ${finding.patternName} (${finding.severity.toUpperCase()}) detected!`
+      );
+      console.log(`::error file=${annotationPath},line=${finding.line},col=${finding.column}::${message}`);
     }
+  }
+
+  if (sarifPath) {
+    writeFileSync(sarifPath, JSON.stringify(toSarif(allLeaks, VERSION), null, 2) + '\n', 'utf-8');
+    console.log(`[agent-redact] SARIF report written to ${sarifPath}`);
+  }
+  if (suppressed.inline + suppressed.baseline > 0) {
+    console.log(
+      `[agent-redact] Suppressed ${suppressed.inline} finding(s) by inline comment and ${suppressed.baseline} by baseline.`
+    );
   }
 
   const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
   const totalLeaks = allLeaks.length;
   const hasLeaks = totalLeaks > 0;
+  const skippedTotal = skipped.binary + skipped['too-large'] + skipped.unreadable;
+  const skippedSummary =
+    `Skipped ${skippedTotal} file(s): ${skipped.binary} binary, ` +
+    `${skipped['too-large']} larger than ${(maxBytes / (1024 * 1024)).toFixed(2)} MB, ` +
+    `${skipped.unreadable} unreadable.`;
+  if (skippedTotal > 0) {
+    console.log(`[agent-redact] ${skippedSummary}`);
+  }
 
   // Set GitHub Action outputs
   setOutput('has-leaks', String(hasLeaks));
@@ -158,7 +146,10 @@ export async function runAction(): Promise<void> {
   // Build GitHub Step Summary Markdown
   let summaryMd = `## 🛡️ agent-redact Security Scan Report\n\n`;
   summaryMd += `* **Status**: ${hasLeaks ? '❌ **Secrets Detected**' : '✅ **No Leaks Found**'}\n`;
-  summaryMd += `* **Files Scanned**: ${filesToScan.length}\n`;
+  summaryMd += `* **Files Scanned**: ${filesToScan.length - skippedTotal}\n`;
+  if (skippedTotal > 0) {
+    summaryMd += `* **Files Skipped**: ${skippedSummary}\n`;
+  }
   summaryMd += `* **Total Leaks Detected**: ${totalLeaks}\n`;
   summaryMd += `* **Scan Duration**: ${durationMs}ms\n\n`;
 
@@ -168,7 +159,7 @@ export async function runAction(): Promise<void> {
     summaryMd += `| :--- | :---: | :--- | :---: | :---: |\n`;
 
     for (const leak of allLeaks) {
-      summaryMd += `| \`${leak.file}\` | ${leak.line} | **${leak.match.patternName}** | \`${leak.match.severity.toUpperCase()}\` | ${leak.match.category} |\n`;
+      summaryMd += `| \`${leak.file}\` | ${leak.line} | **${leak.patternName}** | \`${leak.severity.toUpperCase()}\` | ${leak.category} |\n`;
     }
   } else {
     summaryMd += `🎉 All scanned files are clean and safe from credentials & PII leaks!\n`;
