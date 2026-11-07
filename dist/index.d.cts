@@ -14,9 +14,18 @@ declare class Vault {
     private maxEntries?;
     /** Names (never values) of placeholders dropped by the size cap, oldest first */
     private evictedPlaceholders;
+    /** Bumped on every change to the placeholder set; invalidates the cached unmask regex */
+    private mutations;
+    private unmaskRegexCache?;
     constructor(options?: {
         maxEntries?: number;
     });
+    /**
+     * True when `prefix` is the beginning of at least one known placeholder.
+     * Used by streaming unmaskers to decide whether a chunk tail must be held back.
+     */
+    hasPlaceholderPrefix(prefix: string): boolean;
+    private getUnmaskRegex;
     private evictOldestIfNeeded;
     private rememberEvicted;
     /**
@@ -38,8 +47,11 @@ declare class Vault {
      * Replaces all placeholders in a string back with their original secrets
      * in a deterministic, collision-free single regex pass. Handles multiple
      * secrets mapped to identical custom placeholders sequentially.
+     *
+     * @param encode Optional transform applied to each restored secret, e.g. JSON string
+     *   escaping when the placeholder sits inside a JSON document.
      */
-    unmask(text: string): string;
+    unmask(text: string, encode?: (secret: string) => string): string;
     /**
      * Directly restores an entry into the vault without altering placeholder names.
      */
@@ -126,6 +138,78 @@ declare class RedactTransformStream extends Transform {
  */
 declare function createRedactStream(options?: RedactStreamOptions): RedactTransformStream;
 
+/** Escapes a restored secret so it can be spliced into a JSON string literal */
+declare const jsonStringEscape: (secret: string) => string;
+/**
+ * Incremental unmasker for streamed LLM output. A placeholder such as
+ * `[AWS_ACCESS_KEY_ID_1]` can be split across chunks (`[AWS_ACC` | `ESS_KEY_ID_1]`);
+ * the unmasker holds back a chunk tail only while it is the beginning of a placeholder
+ * that actually exists in the vault, so ordinary text like `[1]` is never delayed.
+ */
+declare class StreamingUnmasker {
+    private readonly vault;
+    private readonly encode?;
+    private pending;
+    constructor(vault: Vault, encode?: ((secret: string) => string) | undefined);
+    /** Feeds the next chunk and returns the text that is safe to emit now */
+    push(chunk: string): string;
+    /** Returns everything still buffered (call once the stream has ended) */
+    flush(): string;
+    private holdStart;
+}
+/** Unmasks an async (or sync) iterable of text chunks, e.g. an LLM token stream */
+declare function unmaskTextStream(source: AsyncIterable<string> | Iterable<string>, vault: Vault): AsyncGenerator<string>;
+/** Node.js Transform that unmasks placeholders in a byte or text stream */
+declare class UnmaskTransformStream extends Transform {
+    private readonly decoder;
+    private readonly unmasker;
+    constructor(vault: Vault);
+    _transform(chunk: Buffer | string, _enc: BufferEncoding, callback: TransformCallback): void;
+    _flush(callback: TransformCallback): void;
+}
+declare function createUnmaskStream(vault: Vault): UnmaskTransformStream;
+/**
+ * Unmasks an Anthropic Messages API event stream (`stream: true`), based on the documented
+ * event shapes: `text_delta` and `input_json_delta` inside `content_block_delta`. Text split
+ * across deltas is restored, tool-input JSON stays valid (secrets are JSON-escaped), and any
+ * held-back text is emitted as an extra delta right before the block's `content_block_stop`.
+ * Other events are deep-unmasked. Events are copied, never mutated.
+ */
+declare function unmaskAnthropicStream<E>(events: AsyncIterable<E>, vault: Vault): AsyncGenerator<E>;
+/**
+ * Unmasks an OpenAI Chat Completions chunk stream (`stream: true`), based on the documented
+ * chunk shape: `choices[].delta.content` and `choices[].delta.tool_calls[].function.arguments`.
+ * Held-back text is released on the chunk that carries the choice's `finish_reason`
+ * (or in a trailing chunk if the stream ends without one). Chunks are copied, never mutated.
+ */
+declare function unmaskOpenAIStream<C>(chunks: AsyncIterable<C>, vault: Vault): AsyncGenerator<C>;
+
+interface DeepRedactOptions extends RedactOptions {
+    /** Vault to reuse across calls (a new one is created otherwise) */
+    vault?: Vault;
+    /** Object keys whose values are never scanned (in addition to binary payloads) */
+    skipKeys?: string[];
+}
+interface DeepRedactResult<T> {
+    /** Deep copy of the input with every string value redacted */
+    value: T;
+    /** Vault holding the placeholders, for `unmaskDeep` / streaming unmask of the response */
+    vault: Vault;
+    totalLeaks: number;
+    stats: Record<string, number>;
+}
+/**
+ * Redacts every string inside a JSON-like value (e.g. an Anthropic or OpenAI request body)
+ * with one shared vault, so placeholders are numbered consistently across messages.
+ * Reversible by default; base64 payloads and `data:` URLs are skipped. The input is not mutated.
+ */
+declare function redactDeep<T>(value: T, options?: DeepRedactOptions): DeepRedactResult<T>;
+/**
+ * Restores placeholders in every string of a JSON-like value (e.g. an SDK response,
+ * including `tool_use` inputs). Returns a deep copy; the input is not mutated.
+ */
+declare function unmaskDeep<T>(value: T, vault: Vault): T;
+
 interface CustomPatternConfig {
     id: string;
     name: string;
@@ -175,7 +259,9 @@ declare function loadConfig(explicitPath?: string, searchDir?: string): Resolved
 
 interface AgentInterceptorOptions extends RedactOptions {
     /**
-     * If true, automatically unmasks placeholders in string responses.
+     * If true, automatically unmasks placeholders in the response: strings, plain
+     * objects/arrays (deeply) and async-generator token streams. Class instances are
+     * returned untouched; use `unmaskAnthropicStream` / `unmaskOpenAIStream` for SDK streams.
      * @default true
      */
     unmaskResponse?: boolean;
@@ -224,4 +310,4 @@ declare function createExpressMiddleware(options?: RedactOptions & {
     redact?: RedactRequestExtension;
 }, _res: unknown, next: () => void) => void;
 
-export { type AgentInterceptorOptions, type AgentRedactConfig, type CustomPatternConfig, EntropyConfig, RedactEngine, RedactOptions, RedactPattern, type RedactRequestExtension, RedactResult, type RedactStreamOptions, RedactTransformStream, type ResolvedConfig, SecretCategory, Severity, Vault, VaultEntry, createExpressMiddleware, createRedactStream, loadConfig, parseRegexString, redact, resolveCustomPattern, unmask, wrapAgent };
+export { type AgentInterceptorOptions, type AgentRedactConfig, type CustomPatternConfig, type DeepRedactOptions, type DeepRedactResult, EntropyConfig, RedactEngine, RedactOptions, RedactPattern, type RedactRequestExtension, RedactResult, type RedactStreamOptions, RedactTransformStream, type ResolvedConfig, SecretCategory, Severity, StreamingUnmasker, UnmaskTransformStream, Vault, VaultEntry, createExpressMiddleware, createRedactStream, createUnmaskStream, jsonStringEscape, loadConfig, parseRegexString, redact, redactDeep, resolveCustomPattern, unmask, unmaskAnthropicStream, unmaskDeep, unmaskOpenAIStream, unmaskTextStream, wrapAgent };

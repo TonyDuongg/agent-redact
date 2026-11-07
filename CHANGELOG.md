@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Streaming & SDK round-trips
+- **`StreamingUnmasker`, `unmaskTextStream`, `createUnmaskStream`:** restore placeholders in streamed LLM output even when one is split across chunks. A chunk tail is held back only while it is the start of a placeholder that exists in the vault, so ordinary `[` text is never delayed.
+- **`unmaskAnthropicStream` / `unmaskOpenAIStream`:** adapters for the Messages and Chat Completions event streams, covering text deltas and tool-call JSON (restored secrets are JSON-escaped, so `partial_json` / `arguments` stay valid).
+- **`redactDeep` / `unmaskDeep`:** sanitize or restore every string in a request/response object with one shared vault, including `tool_use` inputs. Base64 payloads and `data:` URLs are skipped. Inputs are never mutated.
+- **`wrapAgent`:** now also deep-unmasks plain-object responses and stream-unmasks `async function*` responses; class instances are still returned untouched. ⚠️ Object responses are now returned as a restored deep copy, no longer the same reference.
+- **`Vault.unmask(text, encode?)`:** optional `encode` for restored secrets. The unmask regex is cached between calls instead of being rebuilt every time.
+- README: removed the claim of Fastify/Next.js middleware (only Express/Connect middleware exists).
+
 ### ⚡ Performance (quadratic → linear)
 - **Overlap resolution** used a nested scan over accepted matches (O(m²)): a 2 MB log with 100k IP addresses took 18.8 s although the regexes ran in 17 ms. A coverage bitmap now makes it linear (~0.3 s).
 - **Reversible placeholder allocation** rescanned the whole document for every new secret: 40k emails took 11 s, now ~0.2 s.

@@ -1,10 +1,14 @@
 import { redact, unmask } from '../core/engine.js';
 import type { RedactOptions, RedactResult } from '../core/types.js';
 import { Vault } from '../core/vault.js';
+import { unmaskDeep } from '../core/deep.js';
+import { StreamingUnmasker } from '../core/unmask-stream.js';
 
 export interface AgentInterceptorOptions extends RedactOptions {
   /**
-   * If true, automatically unmasks placeholders in string responses.
+   * If true, automatically unmasks placeholders in the response: strings, plain
+   * objects/arrays (deeply) and async-generator token streams. Class instances are
+   * returned untouched; use `unmaskAnthropicStream` / `unmaskOpenAIStream` for SDK streams.
    * @default true
    */
   unmaskResponse?: boolean;
@@ -50,13 +54,46 @@ export function wrapAgent<TOutput>(
     }
 
     const agentResponse = await agentFn(redactResult.text);
-
-    // If response is a string and unmaskResponse is enabled, restore secrets
-    if (unmaskResponse && typeof agentResponse === 'string') {
-      return unmask(agentResponse, vault) as unknown as TOutput;
+    if (!unmaskResponse) {
+      return agentResponse;
     }
 
-    return agentResponse;
+    if (typeof agentResponse === 'string') {
+      return unmask(agentResponse, vault) as unknown as TOutput;
+    }
+    // Async generators (e.g. `async function*` token streams) are unmasked chunk by chunk,
+    // so placeholders split across chunks are still restored
+    if (isAsyncGenerator(agentResponse)) {
+      return unmaskMixedStream(agentResponse, vault) as unknown as TOutput;
+    }
+    // Plain objects/arrays are deep-unmasked; class instances (SDK stream objects,
+    // Buffers, Dates…) are returned untouched so their methods keep working
+    return unmaskDeep(agentResponse, vault);
   };
+}
+
+function isAsyncGenerator(value: unknown): value is AsyncGenerator<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { [Symbol.toStringTag]?: string })[Symbol.toStringTag] === 'AsyncGenerator'
+  );
+}
+
+/** String chunks are stream-unmasked; other items are deep-unmasked one by one */
+async function* unmaskMixedStream(source: AsyncGenerator<unknown>, vault: Vault): AsyncGenerator<unknown> {
+  const unmasker = new StreamingUnmasker(vault);
+  for await (const item of source) {
+    if (typeof item === 'string') {
+      const out = unmasker.push(item);
+      if (out) yield out;
+    } else {
+      const pending = unmasker.flush();
+      if (pending) yield pending;
+      yield unmaskDeep(item, vault);
+    }
+  }
+  const rest = unmasker.flush();
+  if (rest) yield rest;
 }
 
