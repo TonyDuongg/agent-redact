@@ -547,7 +547,7 @@ FIXTURE_TOKEN=ghp_...
 | :--- | :--- |
 | `UserPromptSubmit` | Blocks prompts that contain secrets (the prompt is not sent) |
 | `PreToolUse` → `Read` | Blocks reading a file that contains secrets (suggests the MCP `scan_file` tool for a redacted copy) |
-| `PreToolUse` → `Grep` (`output_mode: content`) | Blocks when a printed line, including `-A/-B/-C` context, would contain a secret; path-only modes are allowed |
+| `PreToolUse` → `Grep` (any output mode) | Blocks when the searched files include one that contains secrets, because content output prints them and `files_with_matches`/`count` act as an oracle. Files are enumerated like ripgrep: `.gitignore` is honoured, a repo-local `core.excludesFile` is not. The agent's regex is never evaluated, and a glob only narrows the check when it is a simple `*`/`**`/`?`/`{a,b}` pattern. |
 | `PreToolUse` → `Bash` | Blocks commands that contain a literal secret, or that print a file with secrets (`cat`, `grep`, `head`, `jq`, …) |
 | `PreToolUse` → `WebFetch`, `WebSearch`, MCP tools, others | Blocks calls whose input contains secrets, or whose `path`/`file_path`/`paths` point at a file with secrets (e.g. filesystem MCP servers) |
 | `PreToolUse` → `Write` / `Edit` | Allowed by default; add `--block-writes` to block secrets being written |

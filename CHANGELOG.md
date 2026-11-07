@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`agent-redact hook [--block-writes] [--config <path>]`** reads the hook event JSON on stdin and exits 2 to block. It covers:
   - prompts containing secrets;
   - `Read` of files with secrets;
-  - `Grep` content output whose printed lines (including context) contain secrets;
+  - `Grep` in any output mode when the searched files include a secret file. The regex is never evaluated (no ripgrep/JS differential, no ReDoS), and only simple globs narrow the check;
   - `Bash` commands that contain secrets or print secret files;
   - other tools whose input contains secrets or whose path arguments point at a secret file.
 
@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - from the agent-writable project config, only additive settings are used (`allowlist`/`include`/`exclude` require an explicit `--config`).
 
 ### 🔒 Git hardening
-- Scan mode runs git with `core.fsmonitor=false` (and no untracked cache or pager). A test showed that a scanned directory's own `.git/config` could otherwise execute a command through `git ls-files`.
+- Scan mode runs git with `core.fsmonitor=false` (no untracked cache, no pager, and no `core.excludesFile`, so a repo-local exclude cannot hide files). It descends into submodules. A test showed that a scanned directory's own `.git/config` could otherwise execute a command through `git ls-files`.
 - Staged content is read with `git cat-file blob`, which applies no textconv or filters.
 
 ### 🔧 Internal

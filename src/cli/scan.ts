@@ -44,24 +44,45 @@ const toPosix = (p: string) => p.split('\\').join('/');
  * .gitignore is honoured exactly as git does; elsewhere common build/dependency
  * directories are skipped. Throws `Cannot read file: <target>` for missing targets.
  */
-export function expandTargets(targets: string[], cwd: string): string[] {
+export interface ExpandOptions {
+  /** Directory names skipped outside git work trees (default: common build/dependency dirs) */
+  excludeDirs?: ReadonlySet<string>;
+  /** Keep files with binary-looking extensions (callers that sniff content themselves) */
+  includeBinaryExtensions?: boolean;
+}
+
+export function expandTargets(targets: string[], cwd: string, options: ExpandOptions = {}): string[] {
+  const excludeDirs = options.excludeDirs ?? DEFAULT_EXCLUDES;
   const out = new Set<string>();
-  for (const target of targets) {
-    const abs = resolve(cwd, target);
+  const visit = (abs: string, label: string, depth: number) => {
     let isDir: boolean;
     try {
       isDir = statSync(abs).isDirectory();
     } catch {
-      throw new Error(`Cannot read file: ${target}`);
+      throw new Error(`Cannot read file: ${label}`);
     }
     if (!isDir) {
       out.add(abs);
     } else if (isGitWorkTree(abs)) {
-      for (const p of gitListFiles('.', abs)) out.add(join(abs, p));
+      for (const p of gitListFiles('.', abs)) {
+        const child = join(abs, p);
+        // Submodules / nested repositories are listed as directories: descend into them
+        // so their files are not silently skipped
+        let childIsDir = false;
+        try {
+          childIsDir = statSync(child).isDirectory();
+        } catch {
+          continue; // deleted in the working tree
+        }
+        if (childIsDir) {
+          if (depth < 8) visit(child, p, depth + 1);
+        } else out.add(child);
+      }
     } else {
-      for (const p of walkFiles(abs, DEFAULT_EXCLUDES)) out.add(p);
+      for (const p of walkFiles(abs, excludeDirs, [], options.includeBinaryExtensions)) out.add(p);
     }
-  }
+  };
+  for (const target of targets) visit(resolve(cwd, target), target, 0);
   return [...out];
 }
 

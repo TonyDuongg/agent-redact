@@ -5,7 +5,14 @@ import { execFileSync } from 'node:child_process';
  * .git/config, and `core.fsmonitor` there is executed by commands such as `ls-files`
  * (verified by tests/scan-cli.test.ts). Disable every config-driven helper we could trigger.
  */
-const HARDENING = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.pager=cat'];
+const HARDENING = [
+  '-c', 'core.fsmonitor=false',
+  '-c', 'core.untrackedCache=false',
+  '-c', 'core.pager=cat',
+  // A repo-local core.excludesFile (writable by an agent) must not hide files from scans;
+  // .gitignore and .git/info/exclude still apply, as they do for ripgrep
+  '-c', 'core.excludesFile='
+];
 
 // Arguments are passed as an array (no shell), so paths can never inject commands.
 const run = (args: string[], cwd: string): Buffer =>

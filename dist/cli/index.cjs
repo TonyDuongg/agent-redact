@@ -945,7 +945,7 @@ function readTextForScan(path, maxBytes = DEFAULT_MAX_SCAN_BYTES) {
     return { ok: false, reason: "unreadable" };
   }
 }
-function walkFiles(dir, excludeDirs, result = []) {
+function walkFiles(dir, excludeDirs, result = [], includeBinaryExtensions = false) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -956,9 +956,9 @@ function walkFiles(dir, excludeDirs, result = []) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name !== ".git" && !excludeDirs.has(entry.name)) {
-        walkFiles(fullPath, excludeDirs, result);
+        walkFiles(fullPath, excludeDirs, result, includeBinaryExtensions);
       }
-    } else if (entry.isFile() && !hasKnownBinaryExtension(entry.name)) {
+    } else if (entry.isFile() && (includeBinaryExtensions || !hasKnownBinaryExtension(entry.name))) {
       result.push(fullPath);
     }
   }
@@ -1487,7 +1487,18 @@ init_version();
 
 // src/cli/scan.ts
 init_files();
-var HARDENING = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.pager=cat"];
+var HARDENING = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.untrackedCache=false",
+  "-c",
+  "core.pager=cat",
+  // A repo-local core.excludesFile (writable by an agent) must not hide files from scans;
+  // .gitignore and .git/info/exclude still apply, as they do for ripgrep
+  "-c",
+  "core.excludesFile="
+];
 var run = (args, cwd) => child_process.execFileSync("git", [...HARDENING, ...args], {
   cwd,
   stdio: ["ignore", "pipe", "ignore"],
@@ -1653,24 +1664,36 @@ var DEFAULT_EXCLUDES = /* @__PURE__ */ new Set([
   "__pycache__"
 ]);
 var toPosix = (p) => p.split("\\").join("/");
-function expandTargets(targets, cwd) {
+function expandTargets(targets, cwd, options = {}) {
+  const excludeDirs = options.excludeDirs ?? DEFAULT_EXCLUDES;
   const out = /* @__PURE__ */ new Set();
-  for (const target of targets) {
-    const abs = path.resolve(cwd, target);
+  const visit = (abs, label, depth) => {
     let isDir;
     try {
       isDir = fs.statSync(abs).isDirectory();
     } catch {
-      throw new Error(`Cannot read file: ${target}`);
+      throw new Error(`Cannot read file: ${label}`);
     }
     if (!isDir) {
       out.add(abs);
     } else if (isGitWorkTree(abs)) {
-      for (const p of gitListFiles(".", abs)) out.add(path.join(abs, p));
+      for (const p of gitListFiles(".", abs)) {
+        const child = path.join(abs, p);
+        let childIsDir = false;
+        try {
+          childIsDir = fs.statSync(child).isDirectory();
+        } catch {
+          continue;
+        }
+        if (childIsDir) {
+          if (depth < 8) visit(child, p, depth + 1);
+        } else out.add(child);
+      }
     } else {
-      for (const p of walkFiles(abs, DEFAULT_EXCLUDES)) out.add(p);
+      for (const p of walkFiles(abs, excludeDirs, [], options.includeBinaryExtensions)) out.add(p);
     }
-  }
+  };
+  for (const target of targets) visit(path.resolve(cwd, target), target, 0);
   return [...out];
 }
 function runScan(req) {
@@ -1832,8 +1855,10 @@ function fileBlockMessage(what, path, check) {
   }
   return `agent-redact blocked ${what} ${path}: it contains ${check.summary.count} secret(s) (${check.summary.types}). Ask the user first, or use the agent-redact MCP tool scan_file to read a redacted copy.`;
 }
-function globToRegExp(glob) {
+function simpleGlobToRegExp(glob) {
+  if (!/^[A-Za-z0-9._\-/*?{},@ ]+$/.test(glob)) return null;
   let re = "";
+  let braceDepth = 0;
   for (let i = 0; i < glob.length; i++) {
     const ch = glob[i];
     if (ch === "*") {
@@ -1843,30 +1868,26 @@ function globToRegExp(glob) {
         if (glob[i + 1] === "/") i++;
       } else re += "[^/]*";
     } else if (ch === "?") re += "[^/]";
-    else if (ch === "{") re += "(?:";
-    else if (ch === "}") re += ")";
-    else if (ch === ",") re += "|";
-    else re += ch.replace(/[.+^$()|[\]\\]/g, "\\$&");
+    else if (ch === "{") {
+      if (++braceDepth > 1) return null;
+      re += "(?:";
+    } else if (ch === "}") {
+      if (--braceDepth < 0) return null;
+      re += ")";
+    } else if (ch === ",") {
+      if (braceDepth === 0) return null;
+      re += "|";
+    } else re += ch.replace(/[.]/g, "\\.");
   }
-  return new RegExp(`^${re}$`);
+  return braceDepth === 0 ? new RegExp(`^${re}$`) : null;
 }
 function checkGrep(input, cwd, options) {
-  if (input["output_mode"] !== "content") return { block: false };
   const target = str(input["path"]) || cwd;
-  let matcher;
-  try {
-    matcher = new RegExp(str(input["pattern"]), input["-i"] === true ? "i" : "");
-  } catch {
-    matcher = null;
-  }
-  const ctx = (k) => typeof input[k] === "number" ? input[k] : 0;
-  const before = Math.max(ctx("-B"), ctx("-C"));
-  const after = Math.max(ctx("-A"), ctx("-C"));
   const glob = str(input["glob"]);
-  const globRe = glob ? globToRegExp(glob) : null;
+  const globRe = glob ? simpleGlobToRegExp(glob) : null;
   let files;
   try {
-    files = expandTargets([target], cwd);
+    files = expandTargets([target], cwd, { excludeDirs: /* @__PURE__ */ new Set(), includeBinaryExtensions: true });
   } catch {
     return { block: false };
   }
@@ -1891,21 +1912,12 @@ function checkGrep(input, cwd, options) {
     }
     const check = checkFile(file, cwd, options);
     if (!check) continue;
-    if (check.kind === "too-large") return { block: true, message: fileBlockMessage("searching", path.relative(cwd, file), check) };
-    const starts = lineStarts(check.text);
-    const lines = check.text.split("\n");
-    const secretLines = new Set(
-      redact(check.text, { ...options, reversible: false }).matches.map((m) => positionAt(starts, m.startIndex).line)
-    );
-    const printed = (line) => {
-      for (let l = Math.max(1, line - after); l <= line + before; l++) {
-        if (!matcher || matcher.test(lines[l - 1] ?? "")) return true;
-      }
-      return false;
+    const rel = path.relative(cwd, file) || file;
+    if (check.kind === "too-large") return { block: true, message: fileBlockMessage("searching", rel, check) };
+    return {
+      block: true,
+      message: `agent-redact blocked Grep: the search includes ${rel}, which contains ${check.summary.count} secret(s) (${check.summary.types}). Narrow the path or glob to files without secrets, or ask the user.`
     };
-    if ([...secretLines].some(printed)) {
-      return { block: true, message: fileBlockMessage("searching", path.relative(cwd, file) || file, check) };
-    }
   }
   return { block: false };
 }

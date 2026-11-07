@@ -157,7 +157,7 @@ function readTextForScan(path, maxBytes = DEFAULT_MAX_SCAN_BYTES) {
     return { ok: false, reason: "unreadable" };
   }
 }
-function walkFiles(dir, excludeDirs, result = []) {
+function walkFiles(dir, excludeDirs, result = [], includeBinaryExtensions = false) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -168,9 +168,9 @@ function walkFiles(dir, excludeDirs, result = []) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name !== ".git" && !excludeDirs.has(entry.name)) {
-        walkFiles(fullPath, excludeDirs, result);
+        walkFiles(fullPath, excludeDirs, result, includeBinaryExtensions);
       }
-    } else if (entry.isFile() && !hasKnownBinaryExtension(entry.name)) {
+    } else if (entry.isFile() && (includeBinaryExtensions || !hasKnownBinaryExtension(entry.name))) {
       result.push(fullPath);
     }
   }

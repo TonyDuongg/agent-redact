@@ -282,15 +282,46 @@ describe('Claude Code hook', () => {
     expect(readHook(dir, 'notes.txt').block).toBe(true);
   });
 
-  it('blocks Grep in content mode when matching lines contain secrets; allows path-only modes', () => {
+  it('blocks Grep in every output mode when the searched files include a secret file', () => {
     const dir = tmp('ar-hook-grep-');
+    mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, '.env'), `AWS_KEY=${AWS}\nOTHER=1\n`);
+    writeFileSync(join(dir, 'src', 'app.ts'), 'export const x = 1;\n');
     const grep = (tool_input: Record<string, unknown>) =>
       evaluateHook({ hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input, cwd: dir });
-    expect(grep({ pattern: 'AWS', path: dir, output_mode: 'content' }).block).toBe(true);
-    expect(grep({ pattern: 'AWS', path: '.env', output_mode: 'content' }).block).toBe(true);
-    expect(grep({ pattern: 'OTHER', path: dir, output_mode: 'content' }).block).toBe(false);
-    expect(grep({ pattern: 'AWS', path: dir }).block).toBe(false); // files_with_matches (default) shows paths only
+    // the agent-supplied regex is never evaluated, so ripgrep/JS differences or ReDoS cannot matter
+    expect(grep({ pattern: 'OTHER', path: dir, output_mode: 'content' }).block).toBe(true);
+    // non-content modes are an oracle (files_with_matches / count reveal whether a guess matches)
+    expect(grep({ pattern: 'AKIA[A-Z0-9]{16}', path: dir }).block).toBe(true);
+    expect(grep({ pattern: 'x', path: dir, output_mode: 'count' }).block).toBe(true);
+    // narrowing to files without secrets is allowed
+    expect(grep({ pattern: 'x', path: join(dir, 'src') }).block).toBe(false);
+    expect(grep({ pattern: 'x', path: dir, glob: '*.ts' }).block).toBe(false);
+  });
+
+  it('ignores globs it cannot interpret exactly (they may never widen what is skipped)', () => {
+    const dir = tmp('ar-hook-glob-');
+    writeFileSync(join(dir, '.env'), `AWS_KEY=${AWS}\n`);
+    const grep = (glob: string) =>
+      evaluateHook({ hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'x', path: dir, glob }, cwd: dir });
+    for (const glob of ['*.[t]s', '!.env', '*.ts\\', '[!a]*']) {
+      expect(grep(glob).block, glob).toBe(true);
+    }
+  });
+
+  it('honours .gitignore the way ripgrep does, but not an agent-set core.excludesFile', () => {
+    const repo = gitRepo();
+    writeFileSync(join(repo, '.gitignore'), '.env\n');
+    writeFileSync(join(repo, '.env'), `AWS_KEY=${AWS}\n`);
+    writeFileSync(join(repo, 'app.ts'), 'x');
+    const grep = () =>
+      evaluateHook({ hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'x' }, cwd: repo });
+    expect(grep().block).toBe(false); // gitignored: ripgrep would not search it either
+
+    writeFileSync(join(repo, 'config.json'), `{"k":"${GH}"}`);
+    writeFileSync(join(repo, 'excludes'), 'config.json\n');
+    git(repo, 'config', 'core.excludesFile', join(repo, 'excludes'));
+    expect(grep().block).toBe(true); // repo-local excludesFile is ignored by the hook
   });
 
   it('checks file-path inputs of other tools (e.g. filesystem MCP servers) but trusts agent-redact scan_file', () => {

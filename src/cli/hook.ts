@@ -2,7 +2,6 @@ import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { redact } from '../core/engine.js';
 import { loadConfig } from '../core/config.js';
-import { lineStarts, positionAt } from '../core/scan.js';
 import type { RedactOptions } from '../core/types.js';
 import { expandTargets } from './scan.js';
 
@@ -154,9 +153,16 @@ function fileBlockMessage(what: string, path: string, check: Exclude<FileCheck, 
   );
 }
 
-/** Minimal glob → RegExp (`*`, `**`, `?`, `{a,b}`); patterns without '/' match the basename */
-function globToRegExp(glob: string): RegExp {
+/**
+ * Glob → RegExp for the conservative subset whose meaning is unambiguous (`*`, `**`, `?`,
+ * `{a,b}` over plain characters). Anything else (character classes, negation, escapes,
+ * nested braces) returns null and the glob is ignored: a glob may only narrow the check,
+ * never skip a file that ripgrep would search. Patterns without '/' match the basename.
+ */
+function simpleGlobToRegExp(glob: string): RegExp | null {
+  if (!/^[A-Za-z0-9._\-/*?{},@ ]+$/.test(glob)) return null;
   let re = '';
+  let braceDepth = 0;
   for (let i = 0; i < glob.length; i++) {
     const ch = glob[i]!;
     if (ch === '*') {
@@ -166,36 +172,38 @@ function globToRegExp(glob: string): RegExp {
         if (glob[i + 1] === '/') i++;
       } else re += '[^/]*';
     } else if (ch === '?') re += '[^/]';
-    else if (ch === '{') re += '(?:';
-    else if (ch === '}') re += ')';
-    else if (ch === ',') re += '|';
-    else re += ch.replace(/[.+^$()|[\]\\]/g, '\\$&');
+    else if (ch === '{') {
+      if (++braceDepth > 1) return null;
+      re += '(?:';
+    } else if (ch === '}') {
+      if (--braceDepth < 0) return null;
+      re += ')';
+    } else if (ch === ',') {
+      if (braceDepth === 0) return null;
+      re += '|';
+    } else re += ch.replace(/[.]/g, '\\.');
   }
-  return new RegExp(`^${re}$`);
+  return braceDepth === 0 ? new RegExp(`^${re}$`) : null;
 }
 
 /**
- * Grep in content mode prints matching lines (plus -A/-B/-C context). Block when any printed
- * line would contain a secret. Invalid regexes and unverifiable searches fail closed.
+ * Grep is blocked when any file it could search contains a secret, in EVERY output mode:
+ * content/context lines print secrets directly, and files_with_matches/count act as an
+ * oracle (a guessed pattern reveals whether it matches). The agent-supplied regex is never
+ * evaluated, so ripgrep/JS regex differences and ReDoS cannot weaken the check.
+ *
+ * Files are enumerated like ripgrep (inside git: tracked + untracked-not-ignored, honouring
+ * .gitignore but not an agent-settable core.excludesFile; outside git: everything except
+ * .git). Hidden files and binary extensions are included.
  */
 function checkGrep(input: Record<string, unknown>, cwd: string, options: RedactOptions): HookDecision {
-  if (input['output_mode'] !== 'content') return { block: false };
   const target = str(input['path']) || cwd;
-  let matcher: RegExp | null;
-  try {
-    matcher = new RegExp(str(input['pattern']), input['-i'] === true ? 'i' : '');
-  } catch {
-    matcher = null; // ripgrep syntax JS cannot parse: assume every line matches
-  }
-  const ctx = (k: string) => (typeof input[k] === 'number' ? (input[k] as number) : 0);
-  const before = Math.max(ctx('-B'), ctx('-C'));
-  const after = Math.max(ctx('-A'), ctx('-C'));
   const glob = str(input['glob']);
-  const globRe = glob ? globToRegExp(glob) : null;
+  const globRe = glob ? simpleGlobToRegExp(glob) : null;
 
   let files: string[];
   try {
-    files = expandTargets([target], cwd);
+    files = expandTargets([target], cwd, { excludeDirs: new Set(), includeBinaryExtensions: true });
   } catch {
     return { block: false }; // path does not exist: grep itself will fail
   }
@@ -220,22 +228,14 @@ function checkGrep(input: Record<string, unknown>, cwd: string, options: RedactO
     }
     const check = checkFile(file, cwd, options);
     if (!check) continue;
-    if (check.kind === 'too-large') return { block: true, message: fileBlockMessage('searching', relative(cwd, file), check) };
-
-    const starts = lineStarts(check.text);
-    const lines = check.text.split('\n');
-    const secretLines = new Set(
-      redact(check.text, { ...options, reversible: false }).matches.map((m) => positionAt(starts, m.startIndex).line)
-    );
-    const printed = (line: number) => {
-      for (let l = Math.max(1, line - after); l <= line + before; l++) {
-        if (!matcher || matcher.test(lines[l - 1] ?? '')) return true;
-      }
-      return false;
+    const rel = relative(cwd, file) || file;
+    if (check.kind === 'too-large') return { block: true, message: fileBlockMessage('searching', rel, check) };
+    return {
+      block: true,
+      message:
+        `agent-redact blocked Grep: the search includes ${rel}, which contains ${check.summary.count} secret(s) ` +
+        `(${check.summary.types}). Narrow the path or glob to files without secrets, or ask the user.`
     };
-    if ([...secretLines].some(printed)) {
-      return { block: true, message: fileBlockMessage('searching', relative(cwd, file) || file, check) };
-    }
   }
   return { block: false };
 }
