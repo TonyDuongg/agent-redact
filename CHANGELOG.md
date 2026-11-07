@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔧 Tooling
+- **TypeScript 5.9 → 6.0.3:** `tsconfig.json` now lists `"types": ["node"]` explicitly, because TS 6 no longer auto-includes `@types`. It also sets `ignoreDeprecations: "6.0"`, because tsup's d.ts step passes the deprecated `baseUrl`. TypeScript 7 (native) is not usable yet: tsup's `rollup-plugin-dts` needs the JS compiler API that TS 7 does not ship.
+- **Vitest 3 → 4.1.** Vitest 5 and tsup 9 require Node ≥ 22.12 / 22.18, so they would drop the Node 20 CI leg. They are left for a separate decision.
+- **esbuild pinned to ^0.28.1 via `overrides`:** this fixes GHSA-g7r4-m6w7-qqqr (low, dev server only), which tsup 8's range could not reach. The only output difference is esbuild's lazy-init helper.
+
 ### 🐍 Python package (`python/`)
 - **`agent-redact` for Python:** a dependency-free wrapper around the CLI, so it uses exactly the same engine.
   - `redact()` returns text plus matches, without secret values.
