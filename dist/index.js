@@ -976,20 +976,37 @@ var isPlainObject = (v) => {
   const proto = Object.getPrototypeOf(v);
   return proto === Object.prototype || proto === null;
 };
-function isBinaryPayload(value, key, parent) {
-  if (value.startsWith("data:") && value.slice(0, 200).includes(";base64,")) return true;
-  if (key === "data" && parent && (parent["type"] === "base64" || "media_type" in parent || "mime_type" in parent)) {
-    return true;
-  }
+function isToolUnmaskAllowed(policy, toolName) {
+  if (policy === true) return true;
+  if (typeof policy === "function") return policy(toolName);
   return false;
 }
-function mapStrings(value, fn, skipKeys, seen = /* @__PURE__ */ new WeakMap(), key, parent) {
+function toolInputSlot(key, parent) {
+  if (key === "input" && parent["type"] === "tool_use") return String(parent["name"] ?? "");
+  if (key === "arguments" && typeof parent["name"] === "string") return parent["name"];
+  return null;
+}
+var BASE64_RE = /^[A-Za-z0-9+/_-]*={0,2}$/;
+var TEXT_MIME_RE = /^(?:text\/|application\/(?:json|xml|yaml|x-yaml|toml|x-toml|javascript|ecmascript|x-sh|x-shellscript|sql|csv|x-ndjson)\b)|\+(?:json|xml)\b/i;
+function findBase64Payload(value, key, parent) {
+  const dataUrl = /^data:([^;,]*)((?:;[^;,]*)*);base64,/i.exec(value.slice(0, 512));
+  if (dataUrl) {
+    const head = dataUrl[0];
+    return { mime: dataUrl[1] || void 0, encoded: value.slice(head.length), rebuild: (e) => head + e };
+  }
+  if (key === "data" && parent && (parent["type"] === "base64" || "media_type" in parent || "mime_type" in parent)) {
+    const mime = parent["media_type"] ?? parent["mime_type"];
+    return { mime: typeof mime === "string" ? mime : void 0, encoded: value, rebuild: (e) => e };
+  }
+  return null;
+}
+function mapStrings(value, fn, skipProp, seen = /* @__PURE__ */ new WeakMap(), key, parent) {
   if (typeof value === "string") return fn(value, key, parent);
   if (Array.isArray(value)) {
     if (seen.has(value)) return seen.get(value);
     const out = [];
     seen.set(value, out);
-    for (const item of value) out.push(mapStrings(item, fn, skipKeys, seen, key, parent));
+    for (const item of value) out.push(mapStrings(item, fn, skipProp, seen, key, parent));
     return out;
   }
   if (isPlainObject(value)) {
@@ -997,7 +1014,7 @@ function mapStrings(value, fn, skipKeys, seen = /* @__PURE__ */ new WeakMap(), k
     const out = {};
     seen.set(value, out);
     for (const [k, v] of Object.entries(value)) {
-      out[k] = skipKeys.has(k) ? v : mapStrings(v, fn, skipKeys, seen, k, value);
+      out[k] = skipProp(k, value) ? v : mapStrings(v, fn, skipProp, seen, k, value);
     }
     return out;
   }
@@ -1006,23 +1023,46 @@ function mapStrings(value, fn, skipKeys, seen = /* @__PURE__ */ new WeakMap(), k
 function redactDeep(value, options = {}) {
   const { vault = new Vault(), skipKeys = [], ...redactOptions } = options;
   const reversible = redactOptions.reversible ?? true;
+  const skip = new Set(skipKeys);
   const stats = {};
   let totalLeaks = 0;
+  const scan = (s) => {
+    const res = redact(s, { ...redactOptions, reversible, vault });
+    totalLeaks += res.totalLeaks;
+    for (const [id, n] of Object.entries(res.stats)) stats[id] = (stats[id] ?? 0) + n;
+    return res.text;
+  };
   const out = mapStrings(
     value,
     (s, key, parent) => {
-      if (isBinaryPayload(s, key, parent)) return s;
-      const res = redact(s, { ...redactOptions, reversible, vault });
-      totalLeaks += res.totalLeaks;
-      for (const [id, n] of Object.entries(res.stats)) stats[id] = (stats[id] ?? 0) + n;
-      return res.text;
+      const payload = findBase64Payload(s, key, parent);
+      if (payload) {
+        const compact = payload.encoded.replace(/\r?\n/g, "");
+        if (BASE64_RE.test(compact)) {
+          const bytes = Buffer.from(compact, "base64");
+          const textual = payload.mime !== void 0 && TEXT_MIME_RE.test(payload.mime) || !bytes.includes(0);
+          if (!textual) return s;
+          const decoded = bytes.toString("utf8");
+          const redacted = scan(decoded);
+          return redacted === decoded ? s : payload.rebuild(Buffer.from(redacted, "utf8").toString("base64"));
+        }
+      }
+      return scan(s);
     },
-    new Set(skipKeys)
+    (k) => skip.has(k)
   );
   return { value: out, vault, totalLeaks, stats };
 }
-function unmaskDeep(value, vault) {
-  return mapStrings(value, (s) => vault.unmask(s), /* @__PURE__ */ new Set());
+function unmaskDeep(value, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
+  return mapStrings(
+    value,
+    (s) => vault.unmask(s),
+    (k, parent) => {
+      const tool = toolInputSlot(k, parent);
+      return tool !== null && !isToolUnmaskAllowed(policy, tool);
+    }
+  );
 }
 
 // src/core/unmask-stream.ts
@@ -1100,9 +1140,11 @@ function getOrCreate(map, key, create) {
   }
   return value;
 }
-async function* unmaskAnthropicStream(events, vault) {
+async function* unmaskAnthropicStream(events, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
   const text = /* @__PURE__ */ new Map();
   const json = /* @__PURE__ */ new Map();
+  const toolNames = /* @__PURE__ */ new Map();
   function* flushBlock(index) {
     const t = text.get(index)?.flush();
     if (t) yield { type: "content_block_delta", index, delta: { type: "text_delta", text: t } };
@@ -1113,6 +1155,10 @@ async function* unmaskAnthropicStream(events, vault) {
   }
   for await (const event of events) {
     const e = event;
+    if (isObject(e) && e["type"] === "content_block_start" && isObject(e["content_block"])) {
+      const block = e["content_block"];
+      if (block["type"] === "tool_use") toolNames.set(Number(e["index"] ?? 0), String(block["name"] ?? ""));
+    }
     if (isObject(e) && e["type"] === "content_block_delta" && isObject(e["delta"])) {
       const index = Number(e["index"] ?? 0);
       const delta = e["delta"];
@@ -1122,6 +1168,10 @@ async function* unmaskAnthropicStream(events, vault) {
         continue;
       }
       if (delta["type"] === "input_json_delta" && typeof delta["partial_json"] === "string") {
+        if (!isToolUnmaskAllowed(policy, toolNames.get(index) ?? "")) {
+          yield { ...e, delta: { ...delta } };
+          continue;
+        }
         const out = getOrCreate(json, index, () => new StreamingUnmasker(vault, jsonStringEscape)).push(
           delta["partial_json"]
         );
@@ -1135,21 +1185,23 @@ async function* unmaskAnthropicStream(events, vault) {
     if (isObject(e) && e["type"] === "message_stop") {
       for (const index of /* @__PURE__ */ new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
     }
-    yield unmaskDeep(event, vault);
+    yield unmaskDeep(event, vault, { unmaskToolInputs: policy });
   }
   for (const index of /* @__PURE__ */ new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
 }
-async function* unmaskOpenAIStream(chunks, vault) {
+async function* unmaskOpenAIStream(chunks, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
   const content = /* @__PURE__ */ new Map();
   const args = /* @__PURE__ */ new Map();
+  const toolNames = /* @__PURE__ */ new Map();
   for await (const chunk of chunks) {
     const c = chunk;
     if (!isObject(c) || !Array.isArray(c["choices"])) {
-      yield unmaskDeep(chunk, vault);
+      yield unmaskDeep(chunk, vault, { unmaskToolInputs: policy });
       continue;
     }
     const choices = c["choices"].map((choice) => {
-      if (!isObject(choice) || !isObject(choice["delta"])) return unmaskDeep(choice, vault);
+      if (!isObject(choice) || !isObject(choice["delta"])) return unmaskDeep(choice, vault, { unmaskToolInputs: policy });
       const index = Number(choice["index"] ?? 0);
       const delta = { ...choice["delta"] };
       const finished = choice["finish_reason"] != null;
@@ -1162,9 +1214,13 @@ async function* unmaskOpenAIStream(chunks, vault) {
       const toolCalls = Array.isArray(delta["tool_calls"]) ? [...delta["tool_calls"]] : [];
       const mapped = toolCalls.map((tc) => {
         if (!isObject(tc) || !isObject(tc["function"]) || typeof tc["function"]["arguments"] !== "string") {
-          return unmaskDeep(tc, vault);
+          return unmaskDeep(tc, vault, { unmaskToolInputs: policy });
         }
         const key = `${index}:${Number(tc["index"] ?? 0)}`;
+        if (typeof tc["function"]["name"] === "string") toolNames.set(key, tc["function"]["name"]);
+        if (!isToolUnmaskAllowed(policy, toolNames.get(key) ?? "")) {
+          return { ...tc, function: { ...tc["function"] } };
+        }
         const u = getOrCreate(args, key, () => new StreamingUnmasker(vault, jsonStringEscape));
         return { ...tc, function: { ...tc["function"], arguments: u.push(tc["function"]["arguments"]) } };
       });
@@ -1266,7 +1322,7 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
 
 // src/middleware/universal.ts
 function wrapAgent(agentFn, options = {}) {
-  const { unmaskResponse = true, onLeakDetected, ...redactOptions } = options;
+  const { unmaskResponse = true, unmaskToolInputs, onLeakDetected, ...redactOptions } = options;
   return async (rawPrompt) => {
     const vault = new Vault();
     const redactResult = redact(rawPrompt, {
@@ -1289,15 +1345,15 @@ function wrapAgent(agentFn, options = {}) {
       return unmask(agentResponse, vault);
     }
     if (isAsyncGenerator(agentResponse)) {
-      return unmaskMixedStream(agentResponse, vault);
+      return unmaskMixedStream(agentResponse, vault, unmaskToolInputs);
     }
-    return unmaskDeep(agentResponse, vault);
+    return unmaskDeep(agentResponse, vault, { unmaskToolInputs });
   };
 }
 function isAsyncGenerator(value) {
   return typeof value === "object" && value !== null && value[Symbol.toStringTag] === "AsyncGenerator";
 }
-async function* unmaskMixedStream(source, vault) {
+async function* unmaskMixedStream(source, vault, unmaskToolInputs) {
   const unmasker = new StreamingUnmasker(vault);
   for await (const item of source) {
     if (typeof item === "string") {
@@ -1306,7 +1362,7 @@ async function* unmaskMixedStream(source, vault) {
     } else {
       const pending = unmasker.flush();
       if (pending) yield pending;
-      yield unmaskDeep(item, vault);
+      yield unmaskDeep(item, vault, { unmaskToolInputs });
     }
   }
   const rest = unmasker.flush();
@@ -1373,6 +1429,6 @@ function createExpressMiddleware(options = {}) {
   };
 }
 
-export { CREDENTIAL_PATTERNS, DEFAULT_PATTERNS, PATTERN_MAP, PII_PATTERNS, RedactEngine, RedactTransformStream, StreamingUnmasker, UnmaskTransformStream, Vault, anthropicApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, azureStorageKeyPattern, basicAuthUrlPattern, calculateShannonEntropy, createExpressMiddleware, createHighEntropyPattern, createRedactStream, createUnmaskStream, creditCardPattern, databaseUriPattern, databaseUrlPattern, digitalOceanTokenPattern, discordTokenPattern, emailPattern, gcpOauthSecretPattern, githubTokenPattern, gitlabTokenPattern, googleApiKeyPattern, huggingFaceTokenPattern, ipv4Pattern, ipv6Pattern, isHighEntropyToken, jsonStringEscape, jwtTokenPattern, loadConfig, mailgunApiKeyPattern, npmTokenPattern, openaiApiKeyPattern, parseRegexString, phonePattern, privateKeyPattern, redact, redactDeep, resolveCustomPattern, sendgridApiKeyPattern, slackTokenPattern, ssnPattern, stripeKeyPattern, supabaseKeyPattern, telegramBotTokenPattern, twilioAccountSidPattern, twilioApiKeyPattern, unmask, unmaskAnthropicStream, unmaskDeep, unmaskOpenAIStream, unmaskTextStream, wrapAgent };
+export { CREDENTIAL_PATTERNS, DEFAULT_PATTERNS, PATTERN_MAP, PII_PATTERNS, RedactEngine, RedactTransformStream, StreamingUnmasker, UnmaskTransformStream, Vault, anthropicApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, azureStorageKeyPattern, basicAuthUrlPattern, calculateShannonEntropy, createExpressMiddleware, createHighEntropyPattern, createRedactStream, createUnmaskStream, creditCardPattern, databaseUriPattern, databaseUrlPattern, digitalOceanTokenPattern, discordTokenPattern, emailPattern, gcpOauthSecretPattern, githubTokenPattern, gitlabTokenPattern, googleApiKeyPattern, huggingFaceTokenPattern, ipv4Pattern, ipv6Pattern, isHighEntropyToken, isToolUnmaskAllowed, jsonStringEscape, jwtTokenPattern, loadConfig, mailgunApiKeyPattern, npmTokenPattern, openaiApiKeyPattern, parseRegexString, phonePattern, privateKeyPattern, redact, redactDeep, resolveCustomPattern, sendgridApiKeyPattern, slackTokenPattern, ssnPattern, stripeKeyPattern, supabaseKeyPattern, telegramBotTokenPattern, twilioAccountSidPattern, twilioApiKeyPattern, unmask, unmaskAnthropicStream, unmaskDeep, unmaskOpenAIStream, unmaskTextStream, wrapAgent };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

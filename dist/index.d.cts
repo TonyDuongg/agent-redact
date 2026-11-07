@@ -138,6 +138,60 @@ declare class RedactTransformStream extends Transform {
  */
 declare function createRedactStream(options?: RedactStreamOptions): RedactTransformStream;
 
+interface DeepRedactOptions extends RedactOptions {
+    /** Vault to reuse across calls (a new one is created otherwise) */
+    vault?: Vault;
+    /** Object keys whose values are never scanned (in addition to binary payloads) */
+    skipKeys?: string[];
+}
+interface DeepRedactResult<T> {
+    /** Deep copy of the input with every string value redacted */
+    value: T;
+    /** Vault holding the placeholders, for `unmaskDeep` / streaming unmask of the response */
+    vault: Vault;
+    totalLeaks: number;
+    stats: Record<string, number>;
+}
+/**
+ * Policy for restoring secrets inside model-generated tool-call inputs.
+ * `false` (default) keeps placeholders there: a prompt-injected model could otherwise
+ * smuggle a placeholder into e.g. an HTTP tool's URL and have the real secret sent out.
+ * `true` restores every tool; a function decides per tool name.
+ */
+type ToolInputPolicy = boolean | ((toolName: string) => boolean);
+declare function isToolUnmaskAllowed(policy: ToolInputPolicy | undefined, toolName: string): boolean;
+/**
+ * Redacts every string inside a JSON-like value (e.g. an Anthropic or OpenAI request body)
+ * with one shared vault, so placeholders are numbered consistently across messages.
+ * Reversible by default. The input is not mutated.
+ *
+ * Base64 payloads (`data:…;base64,` URLs, `data` next to a media type) fail closed:
+ * - content that is not actually base64 is redacted like any other string;
+ * - base64 that decodes to text (text MIME type, or no NUL bytes) is decoded, redacted
+ *   and re-encoded, because the model reads the decoded document;
+ * - genuine binary (images, audio, PDFs with binary streams) is left byte-for-byte intact.
+ *   Text inside binary formats such as PDFs is NOT scanned.
+ */
+declare function redactDeep<T>(value: T, options?: DeepRedactOptions): DeepRedactResult<T>;
+interface UnmaskDeepOptions {
+    /** See {@link ToolInputPolicy}. Default `false`: tool-call inputs keep their placeholders. */
+    unmaskToolInputs?: ToolInputPolicy;
+}
+/**
+ * Restores placeholders in every string of a JSON-like value (e.g. an SDK response).
+ * Model-generated tool-call inputs are left masked unless `unmaskToolInputs` allows it.
+ * Returns a deep copy; the input is not mutated.
+ */
+declare function unmaskDeep<T>(value: T, vault: Vault, options?: UnmaskDeepOptions): T;
+
+interface StreamAdapterOptions {
+    /**
+     * Restore secrets inside streamed tool-call arguments. Default `false`: a prompt-injected
+     * model could place a placeholder in, say, an HTTP tool's URL and exfiltrate the secret.
+     * Pass `true` or a per-tool-name predicate only for tools you trust with real secrets.
+     */
+    unmaskToolInputs?: ToolInputPolicy;
+}
 /** Escapes a restored secret so it can be spliced into a JSON string literal */
 declare const jsonStringEscape: (secret: string) => string;
 /**
@@ -171,44 +225,20 @@ declare function createUnmaskStream(vault: Vault): UnmaskTransformStream;
 /**
  * Unmasks an Anthropic Messages API event stream (`stream: true`), based on the documented
  * event shapes: `text_delta` and `input_json_delta` inside `content_block_delta`. Text split
- * across deltas is restored, tool-input JSON stays valid (secrets are JSON-escaped), and any
- * held-back text is emitted as an extra delta right before the block's `content_block_stop`.
- * Other events are deep-unmasked. Events are copied, never mutated.
+ * across deltas is restored and any held-back text is emitted as an extra delta right before
+ * the block's `content_block_stop`. Tool-input JSON is only restored when allowed by
+ * `unmaskToolInputs` (secrets are then JSON-escaped so it stays valid). Other events are
+ * deep-unmasked under the same policy. Events are copied, never mutated.
  */
-declare function unmaskAnthropicStream<E>(events: AsyncIterable<E>, vault: Vault): AsyncGenerator<E>;
+declare function unmaskAnthropicStream<E>(events: AsyncIterable<E>, vault: Vault, options?: StreamAdapterOptions): AsyncGenerator<E>;
 /**
  * Unmasks an OpenAI Chat Completions chunk stream (`stream: true`), based on the documented
  * chunk shape: `choices[].delta.content` and `choices[].delta.tool_calls[].function.arguments`.
  * Held-back text is released on the chunk that carries the choice's `finish_reason`
- * (or in a trailing chunk if the stream ends without one). Chunks are copied, never mutated.
+ * (or in a trailing chunk if the stream ends without one). Tool-call arguments are only
+ * restored when allowed by `unmaskToolInputs`. Chunks are copied, never mutated.
  */
-declare function unmaskOpenAIStream<C>(chunks: AsyncIterable<C>, vault: Vault): AsyncGenerator<C>;
-
-interface DeepRedactOptions extends RedactOptions {
-    /** Vault to reuse across calls (a new one is created otherwise) */
-    vault?: Vault;
-    /** Object keys whose values are never scanned (in addition to binary payloads) */
-    skipKeys?: string[];
-}
-interface DeepRedactResult<T> {
-    /** Deep copy of the input with every string value redacted */
-    value: T;
-    /** Vault holding the placeholders, for `unmaskDeep` / streaming unmask of the response */
-    vault: Vault;
-    totalLeaks: number;
-    stats: Record<string, number>;
-}
-/**
- * Redacts every string inside a JSON-like value (e.g. an Anthropic or OpenAI request body)
- * with one shared vault, so placeholders are numbered consistently across messages.
- * Reversible by default; base64 payloads and `data:` URLs are skipped. The input is not mutated.
- */
-declare function redactDeep<T>(value: T, options?: DeepRedactOptions): DeepRedactResult<T>;
-/**
- * Restores placeholders in every string of a JSON-like value (e.g. an SDK response,
- * including `tool_use` inputs). Returns a deep copy; the input is not mutated.
- */
-declare function unmaskDeep<T>(value: T, vault: Vault): T;
+declare function unmaskOpenAIStream<C>(chunks: AsyncIterable<C>, vault: Vault, options?: StreamAdapterOptions): AsyncGenerator<C>;
 
 interface CustomPatternConfig {
     id: string;
@@ -266,6 +296,12 @@ interface AgentInterceptorOptions extends RedactOptions {
      */
     unmaskResponse?: boolean;
     /**
+     * Restore secrets inside model-generated tool-call inputs of object/stream responses.
+     * Default `false`: a prompt-injected model could otherwise exfiltrate a secret by placing
+     * its placeholder in a tool argument (e.g. a URL). See {@link ToolInputPolicy}.
+     */
+    unmaskToolInputs?: ToolInputPolicy;
+    /**
      * Optional callback invoked whenever one or more secrets are detected and masked.
      */
     onLeakDetected?: (info: {
@@ -310,4 +346,4 @@ declare function createExpressMiddleware(options?: RedactOptions & {
     redact?: RedactRequestExtension;
 }, _res: unknown, next: () => void) => void;
 
-export { type AgentInterceptorOptions, type AgentRedactConfig, type CustomPatternConfig, type DeepRedactOptions, type DeepRedactResult, EntropyConfig, RedactEngine, RedactOptions, RedactPattern, type RedactRequestExtension, RedactResult, type RedactStreamOptions, RedactTransformStream, type ResolvedConfig, SecretCategory, Severity, StreamingUnmasker, UnmaskTransformStream, Vault, VaultEntry, createExpressMiddleware, createRedactStream, createUnmaskStream, jsonStringEscape, loadConfig, parseRegexString, redact, redactDeep, resolveCustomPattern, unmask, unmaskAnthropicStream, unmaskDeep, unmaskOpenAIStream, unmaskTextStream, wrapAgent };
+export { type AgentInterceptorOptions, type AgentRedactConfig, type CustomPatternConfig, type DeepRedactOptions, type DeepRedactResult, EntropyConfig, RedactEngine, RedactOptions, RedactPattern, type RedactRequestExtension, RedactResult, type RedactStreamOptions, RedactTransformStream, type ResolvedConfig, SecretCategory, Severity, type StreamAdapterOptions, StreamingUnmasker, type ToolInputPolicy, type UnmaskDeepOptions, UnmaskTransformStream, Vault, VaultEntry, createExpressMiddleware, createRedactStream, createUnmaskStream, isToolUnmaskAllowed, jsonStringEscape, loadConfig, parseRegexString, redact, redactDeep, resolveCustomPattern, unmask, unmaskAnthropicStream, unmaskDeep, unmaskOpenAIStream, unmaskTextStream, wrapAgent };

@@ -1,7 +1,16 @@
 import { Transform, type TransformCallback } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import type { Vault } from './vault.js';
-import { unmaskDeep } from './deep.js';
+import { unmaskDeep, isToolUnmaskAllowed, type ToolInputPolicy } from './deep.js';
+
+export interface StreamAdapterOptions {
+  /**
+   * Restore secrets inside streamed tool-call arguments. Default `false`: a prompt-injected
+   * model could place a placeholder in, say, an HTTP tool's URL and exfiltrate the secret.
+   * Pass `true` or a per-tool-name predicate only for tools you trust with real secrets.
+   */
+  unmaskToolInputs?: ToolInputPolicy;
+}
 
 /** Escapes a restored secret so it can be spliced into a JSON string literal */
 export const jsonStringEscape = (secret: string): string => JSON.stringify(secret).slice(1, -1);
@@ -106,13 +115,20 @@ function getOrCreate<K, V>(map: Map<K, V>, key: K, create: () => V): V {
 /**
  * Unmasks an Anthropic Messages API event stream (`stream: true`), based on the documented
  * event shapes: `text_delta` and `input_json_delta` inside `content_block_delta`. Text split
- * across deltas is restored, tool-input JSON stays valid (secrets are JSON-escaped), and any
- * held-back text is emitted as an extra delta right before the block's `content_block_stop`.
- * Other events are deep-unmasked. Events are copied, never mutated.
+ * across deltas is restored and any held-back text is emitted as an extra delta right before
+ * the block's `content_block_stop`. Tool-input JSON is only restored when allowed by
+ * `unmaskToolInputs` (secrets are then JSON-escaped so it stays valid). Other events are
+ * deep-unmasked under the same policy. Events are copied, never mutated.
  */
-export async function* unmaskAnthropicStream<E>(events: AsyncIterable<E>, vault: Vault): AsyncGenerator<E> {
+export async function* unmaskAnthropicStream<E>(
+  events: AsyncIterable<E>,
+  vault: Vault,
+  options: StreamAdapterOptions = {}
+): AsyncGenerator<E> {
+  const policy = options.unmaskToolInputs;
   const text = new Map<number, StreamingUnmasker>();
   const json = new Map<number, StreamingUnmasker>();
+  const toolNames = new Map<number, string>();
 
   function* flushBlock(index: number): Generator<E> {
     const t = text.get(index)?.flush();
@@ -125,6 +141,10 @@ export async function* unmaskAnthropicStream<E>(events: AsyncIterable<E>, vault:
 
   for await (const event of events) {
     const e = event as unknown;
+    if (isObject(e) && e['type'] === 'content_block_start' && isObject(e['content_block'])) {
+      const block = e['content_block'];
+      if (block['type'] === 'tool_use') toolNames.set(Number(e['index'] ?? 0), String(block['name'] ?? ''));
+    }
     if (isObject(e) && e['type'] === 'content_block_delta' && isObject(e['delta'])) {
       const index = Number(e['index'] ?? 0);
       const delta = e['delta'];
@@ -134,6 +154,10 @@ export async function* unmaskAnthropicStream<E>(events: AsyncIterable<E>, vault:
         continue;
       }
       if (delta['type'] === 'input_json_delta' && typeof delta['partial_json'] === 'string') {
+        if (!isToolUnmaskAllowed(policy, toolNames.get(index) ?? '')) {
+          yield { ...e, delta: { ...delta } } as E; // placeholders stay masked
+          continue;
+        }
         const out = getOrCreate(json, index, () => new StreamingUnmasker(vault, jsonStringEscape)).push(
           delta['partial_json']
         );
@@ -147,7 +171,7 @@ export async function* unmaskAnthropicStream<E>(events: AsyncIterable<E>, vault:
     if (isObject(e) && e['type'] === 'message_stop') {
       for (const index of new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
     }
-    yield unmaskDeep(event, vault);
+    yield unmaskDeep(event, vault, { unmaskToolInputs: policy });
   }
   for (const index of new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
 }
@@ -156,20 +180,27 @@ export async function* unmaskAnthropicStream<E>(events: AsyncIterable<E>, vault:
  * Unmasks an OpenAI Chat Completions chunk stream (`stream: true`), based on the documented
  * chunk shape: `choices[].delta.content` and `choices[].delta.tool_calls[].function.arguments`.
  * Held-back text is released on the chunk that carries the choice's `finish_reason`
- * (or in a trailing chunk if the stream ends without one). Chunks are copied, never mutated.
+ * (or in a trailing chunk if the stream ends without one). Tool-call arguments are only
+ * restored when allowed by `unmaskToolInputs`. Chunks are copied, never mutated.
  */
-export async function* unmaskOpenAIStream<C>(chunks: AsyncIterable<C>, vault: Vault): AsyncGenerator<C> {
+export async function* unmaskOpenAIStream<C>(
+  chunks: AsyncIterable<C>,
+  vault: Vault,
+  options: StreamAdapterOptions = {}
+): AsyncGenerator<C> {
+  const policy = options.unmaskToolInputs;
   const content = new Map<number, StreamingUnmasker>();
   const args = new Map<string, StreamingUnmasker>();
+  const toolNames = new Map<string, string>();
 
   for await (const chunk of chunks) {
     const c = chunk as unknown;
     if (!isObject(c) || !Array.isArray(c['choices'])) {
-      yield unmaskDeep(chunk, vault);
+      yield unmaskDeep(chunk, vault, { unmaskToolInputs: policy });
       continue;
     }
     const choices = (c['choices'] as unknown[]).map((choice) => {
-      if (!isObject(choice) || !isObject(choice['delta'])) return unmaskDeep(choice, vault);
+      if (!isObject(choice) || !isObject(choice['delta'])) return unmaskDeep(choice, vault, { unmaskToolInputs: policy });
       const index = Number(choice['index'] ?? 0);
       const delta: Json = { ...choice['delta'] };
       const finished = choice['finish_reason'] != null;
@@ -184,9 +215,14 @@ export async function* unmaskOpenAIStream<C>(chunks: AsyncIterable<C>, vault: Va
       const toolCalls = Array.isArray(delta['tool_calls']) ? [...(delta['tool_calls'] as unknown[])] : [];
       const mapped = toolCalls.map((tc) => {
         if (!isObject(tc) || !isObject(tc['function']) || typeof tc['function']['arguments'] !== 'string') {
-          return unmaskDeep(tc, vault);
+          return unmaskDeep(tc, vault, { unmaskToolInputs: policy });
         }
         const key = `${index}:${Number(tc['index'] ?? 0)}`;
+        // The function name arrives on the first delta of each tool call
+        if (typeof tc['function']['name'] === 'string') toolNames.set(key, tc['function']['name']);
+        if (!isToolUnmaskAllowed(policy, toolNames.get(key) ?? '')) {
+          return { ...tc, function: { ...tc['function'] } }; // placeholders stay masked
+        }
         const u = getOrCreate(args, key, () => new StreamingUnmasker(vault, jsonStringEscape));
         return { ...tc, function: { ...tc['function'], arguments: u.push(tc['function']['arguments']) } };
       });

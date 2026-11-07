@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`unmaskAnthropicStream` / `unmaskOpenAIStream`:** adapters for the Messages and Chat Completions event streams, covering text deltas and tool-call JSON (restored secrets are JSON-escaped, so `partial_json` / `arguments` stay valid).
 - **`redactDeep` / `unmaskDeep`:** sanitize or restore every string in a request/response object with one shared vault, including `tool_use` inputs. Base64 payloads and `data:` URLs are skipped. Inputs are never mutated.
 - **`wrapAgent`:** now also deep-unmasks plain-object responses and stream-unmasks `async function*` responses; class instances are still returned untouched. ⚠️ Object responses are now returned as a restored deep copy, no longer the same reference.
+- **Exfiltration guard:** model-generated tool-call inputs (`tool_use.input`, `function.arguments`) are **not** unmasked by default, because a prompt-injected model could otherwise route a secret into a network-bound tool argument. Opt in with `unmaskToolInputs: true` or a per-tool predicate (`unmaskDeep`, both stream adapters, `wrapAgent`).
+- **Base64 fails closed in `redactDeep`:** content that is not actually base64 is redacted normally, and text documents encoded as base64 are decoded, redacted and re-encoded. Only genuine binary is skipped.
 - **`Vault.unmask(text, encode?)`:** optional `encode` for restored secrets. The unmask regex is cached between calls instead of being rebuilt every time.
 - README: removed the claim of Fastify/Next.js middleware (only Express/Connect middleware exists).
 

