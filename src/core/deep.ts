@@ -40,14 +40,34 @@ export function isToolUnmaskAllowed(policy: ToolInputPolicy | undefined, toolNam
   return false;
 }
 
+const nameOf = (parent: Obj): string => {
+  for (const k of ['name', 'toolName', 'tool_name']) {
+    if (typeof parent[k] === 'string') return parent[k] as string;
+  }
+  return ''; // unknown tool: only an unconditional `unmaskToolInputs: true` restores it
+};
+
 /**
- * Returns the tool name when `parent[key]` holds model-generated tool arguments:
- * Anthropic `{ type: 'tool_use', name, input }`, OpenAI `{ name, arguments }`
- * (chat `function`, legacy `function_call`, Responses API `function_call` items).
+ * Returns the tool name ('' when unknown) when `parent[key]` holds model-generated tool
+ * arguments, or null otherwise. Deny-by-default: every known argument shape counts,
+ * including partial/streamed ones whose tool name is not repeated on each chunk.
+ *
+ * - `arguments` / `args` / `partial_json` anywhere: OpenAI chat `function` (incl. later
+ *   stream deltas without `name`), legacy `function_call`, Responses `function_call` items and
+ *   `*.function_call_arguments.done`, Gemini `functionCall`, LangChain `tool_calls`,
+ *   Anthropic `input_json_delta`
+ * - `input` / `parameters` on any object whose `type` mentions a tool or function call
+ *   (`tool_use`, `server_tool_use`, `mcp_tool_use`, `tool-call`…) or that names a tool
+ *   via `toolName` (Vercel AI SDK)
+ * - `delta` on Responses `*.function_call_arguments.delta` events
  */
 function toolInputSlot(key: string, parent: Obj): string | null {
-  if (key === 'input' && parent['type'] === 'tool_use') return String(parent['name'] ?? '');
-  if (key === 'arguments' && typeof parent['name'] === 'string') return parent['name'];
+  const type = typeof parent['type'] === 'string' ? (parent['type'] as string) : '';
+  if (key === 'arguments' || key === 'args' || key === 'partial_json') return nameOf(parent);
+  if ((key === 'input' || key === 'parameters') && (/tool|function/i.test(type) || 'toolName' in parent)) {
+    return nameOf(parent);
+  }
+  if (key === 'delta' && /function_call_arguments/i.test(type)) return '';
   return null;
 }
 
@@ -78,7 +98,8 @@ function findBase64Payload(value: string, key: string | undefined, parent: Obj |
 function mapStrings(
   value: unknown,
   fn: (s: string, key: string | undefined, parent: Obj | undefined) => string,
-  skipProp: (key: string, parent: Obj) => boolean,
+  /** 'skip' leaves the subtree as is; 'all' maps the subtree without further checks */
+  skipProp: (key: string, parent: Obj) => 'skip' | 'all' | undefined,
   seen = new WeakMap<object, unknown>(),
   key?: string,
   parent?: Obj
@@ -96,7 +117,11 @@ function mapStrings(
     const out: Obj = {};
     seen.set(value, out);
     for (const [k, v] of Object.entries(value)) {
-      out[k] = skipProp(k, value) ? v : mapStrings(v, fn, skipProp, seen, k, value);
+      const decision = skipProp(k, value);
+      out[k] =
+        decision === 'skip'
+          ? v
+          : mapStrings(v, fn, decision === 'all' ? () => undefined : skipProp, seen, k, value);
     }
     return out;
   }
@@ -150,7 +175,7 @@ export function redactDeep<T>(value: T, options: DeepRedactOptions = {}): DeepRe
       }
       return scan(s);
     },
-    (k) => skip.has(k)
+    (k) => (skip.has(k) ? 'skip' : undefined)
   ) as T;
 
   return { value: out, vault, totalLeaks, stats };
@@ -173,7 +198,10 @@ export function unmaskDeep<T>(value: T, vault: Vault, options: UnmaskDeepOptions
     (s) => vault.unmask(s),
     (k, parent) => {
       const tool = toolInputSlot(k, parent);
-      return tool !== null && !isToolUnmaskAllowed(policy, tool);
+      if (tool === null) return undefined;
+      // An allowed tool's arguments are restored as a whole; nested keys like `args` inside
+      // them are part of that tool's input, not separate tool calls
+      return isToolUnmaskAllowed(policy, tool) ? 'all' : 'skip';
     }
   ) as T;
 }

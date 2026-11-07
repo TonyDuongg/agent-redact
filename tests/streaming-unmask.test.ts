@@ -189,6 +189,32 @@ describe('redactDeep / unmaskDeep', () => {
     const opted = unmaskDeep(msg, vault, { unmaskToolInputs: true });
     expect(JSON.parse(opted.tool_calls[0]!.function.arguments)).toEqual({ k: AWS });
   });
+
+  it('keeps every known tool-argument shape masked by default (deny by default)', () => {
+    const { vault } = vaultWith(AWS);
+    const P = '[AWS_ACCESS_KEY_ID_1]';
+    const shapes: Record<string, unknown> = {
+      'Anthropic input_json_delta event': { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: `{"u":"${P}"}` } },
+      'Anthropic server_tool_use': { type: 'server_tool_use', name: 'web_fetch', input: { url: `https://x/?k=${P}` } },
+      'Anthropic mcp_tool_use': { type: 'mcp_tool_use', name: 'fetch', server_name: 's', input: { url: P } },
+      'OpenAI chunk delta without name': { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: `"${P}"}` } }] } }] },
+      'OpenAI Responses arguments.delta': { type: 'response.function_call_arguments.delta', item_id: 'i', delta: `{"u":"${P}` },
+      'OpenAI Responses arguments.done': { type: 'response.function_call_arguments.done', item_id: 'i', arguments: `{"u":"${P}"}` },
+      'OpenAI Responses function_call item': { type: 'function_call', call_id: 'c', name: 'http_get', arguments: `{"u":"${P}"}` },
+      'Gemini functionCall': { functionCall: { name: 'http_get', args: { url: P } } },
+      'LangChain tool_calls': { tool_calls: [{ id: 't', name: 'http_get', args: { url: P } }] },
+      'Vercel AI SDK toolCalls': { toolCalls: [{ toolCallId: 't', toolName: 'http_get', input: { url: P } }] }
+    };
+    for (const [label, shape] of Object.entries(shapes)) {
+      expect(JSON.stringify(unmaskDeep(shape, vault)), label).not.toContain(AWS);
+    }
+  });
+
+  it('still restores ordinary text fields next to tool calls', () => {
+    const { vault } = vaultWith(AWS);
+    const out = unmaskDeep({ text: 'see [AWS_ACCESS_KEY_ID_1]', note: { body: '[AWS_ACCESS_KEY_ID_1]' } }, vault);
+    expect(out).toEqual({ text: `see ${AWS}`, note: { body: AWS } });
+  });
 });
 
 describe('SDK stream adapters', () => {
@@ -264,9 +290,32 @@ describe('SDK stream adapters', () => {
     const out = await collect(unmaskOpenAIStream(fromArray(chunks), vault, { unmaskToolInputs: true }));
     expect(JSON.parse(argsOf(out))).toEqual({ k: AWS });
   });
+
+  it('passes unrecognised event and chunk shapes through unchanged (fail closed)', async () => {
+    const { vault } = vaultWith(AWS);
+    const P = '[AWS_ACCESS_KEY_ID_1]';
+    const anthropicUnknown = [{ type: 'future_event_type', payload: { url: `https://x/?k=${P}` } }];
+    const outA = await collect(unmaskAnthropicStream(fromArray(anthropicUnknown), vault, { unmaskToolInputs: true }));
+    expect(JSON.stringify(outA)).not.toContain(AWS);
+
+    const openaiUnknown = [{ type: 'response.function_call_arguments.delta', delta: `{"k":"${P}"}` }, { object: 'x', data: P }];
+    const outO = await collect(unmaskOpenAIStream(fromArray(openaiUnknown), vault));
+    expect(JSON.stringify(outO)).not.toContain(AWS);
+  });
 });
 
 describe('wrapAgent', () => {
+  it('keeps tool arguments masked when an async generator yields SDK event objects', async () => {
+    const agent = wrapAgent(async (prompt: string) =>
+      fromArray([
+        { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { name: 'http_get', arguments: '' } }] } }] },
+        { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: `{"q":"${prompt}"}` } }] } }] }
+      ])
+    );
+    const res = await agent(`key ${AWS}`);
+    expect(JSON.stringify(await collect(res))).not.toContain(AWS);
+  });
+
   it('deep-unmasks object responses', async () => {
     const agent = wrapAgent(async (prompt: string) => ({ echo: prompt, nested: [prompt] }));
     const res = await agent(`my key ${AWS}`);

@@ -101,6 +101,16 @@ export function createUnmaskStream(vault: Vault): UnmaskTransformStream {
 }
 
 type Json = Record<string, unknown>;
+
+/** Anthropic stream events whose payloads may be deep-unmasked (everything else passes through) */
+const ANTHROPIC_ENVELOPE_EVENTS = new Set([
+  'message_start',
+  'content_block_start',
+  'content_block_stop',
+  'message_delta',
+  'message_stop',
+  'ping'
+]);
 const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null;
 
 function getOrCreate<K, V>(map: Map<K, V>, key: K, create: () => V): V {
@@ -171,7 +181,13 @@ export async function* unmaskAnthropicStream<E>(
     if (isObject(e) && e['type'] === 'message_stop') {
       for (const index of new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
     }
-    yield unmaskDeep(event, vault, { unmaskToolInputs: policy });
+    // Fail closed: only well-known envelope events are deep-unmasked (under the tool policy);
+    // unknown event or delta types pass through with their placeholders intact
+    if (isObject(e) && typeof e['type'] === 'string' && ANTHROPIC_ENVELOPE_EVENTS.has(e['type'])) {
+      yield unmaskDeep(event, vault, { unmaskToolInputs: policy });
+    } else {
+      yield event;
+    }
   }
   for (const index of new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
 }
@@ -195,12 +211,13 @@ export async function* unmaskOpenAIStream<C>(
 
   for await (const chunk of chunks) {
     const c = chunk as unknown;
+    // Fail closed: unrecognised chunk/choice shapes pass through with placeholders intact
     if (!isObject(c) || !Array.isArray(c['choices'])) {
-      yield unmaskDeep(chunk, vault, { unmaskToolInputs: policy });
+      yield chunk;
       continue;
     }
     const choices = (c['choices'] as unknown[]).map((choice) => {
-      if (!isObject(choice) || !isObject(choice['delta'])) return unmaskDeep(choice, vault, { unmaskToolInputs: policy });
+      if (!isObject(choice) || !isObject(choice['delta'])) return choice;
       const index = Number(choice['index'] ?? 0);
       const delta: Json = { ...choice['delta'] };
       const finished = choice['finish_reason'] != null;
@@ -215,7 +232,7 @@ export async function* unmaskOpenAIStream<C>(
       const toolCalls = Array.isArray(delta['tool_calls']) ? [...(delta['tool_calls'] as unknown[])] : [];
       const mapped = toolCalls.map((tc) => {
         if (!isObject(tc) || !isObject(tc['function']) || typeof tc['function']['arguments'] !== 'string') {
-          return unmaskDeep(tc, vault, { unmaskToolInputs: policy });
+          return tc;
         }
         const key = `${index}:${Number(tc['index'] ?? 0)}`;
         // The function name arrives on the first delta of each tool call

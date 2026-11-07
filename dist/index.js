@@ -981,9 +981,19 @@ function isToolUnmaskAllowed(policy, toolName) {
   if (typeof policy === "function") return policy(toolName);
   return false;
 }
+var nameOf = (parent) => {
+  for (const k of ["name", "toolName", "tool_name"]) {
+    if (typeof parent[k] === "string") return parent[k];
+  }
+  return "";
+};
 function toolInputSlot(key, parent) {
-  if (key === "input" && parent["type"] === "tool_use") return String(parent["name"] ?? "");
-  if (key === "arguments" && typeof parent["name"] === "string") return parent["name"];
+  const type = typeof parent["type"] === "string" ? parent["type"] : "";
+  if (key === "arguments" || key === "args" || key === "partial_json") return nameOf(parent);
+  if ((key === "input" || key === "parameters") && (/tool|function/i.test(type) || "toolName" in parent)) {
+    return nameOf(parent);
+  }
+  if (key === "delta" && /function_call_arguments/i.test(type)) return "";
   return null;
 }
 var BASE64_RE = /^[A-Za-z0-9+/_-]*={0,2}$/;
@@ -1014,7 +1024,8 @@ function mapStrings(value, fn, skipProp, seen = /* @__PURE__ */ new WeakMap(), k
     const out = {};
     seen.set(value, out);
     for (const [k, v] of Object.entries(value)) {
-      out[k] = skipProp(k, value) ? v : mapStrings(v, fn, skipProp, seen, k, value);
+      const decision = skipProp(k, value);
+      out[k] = decision === "skip" ? v : mapStrings(v, fn, decision === "all" ? () => void 0 : skipProp, seen, k, value);
     }
     return out;
   }
@@ -1049,7 +1060,7 @@ function redactDeep(value, options = {}) {
       }
       return scan(s);
     },
-    (k) => skip.has(k)
+    (k) => skip.has(k) ? "skip" : void 0
   );
   return { value: out, vault, totalLeaks, stats };
 }
@@ -1060,7 +1071,8 @@ function unmaskDeep(value, vault, options = {}) {
     (s) => vault.unmask(s),
     (k, parent) => {
       const tool = toolInputSlot(k, parent);
-      return tool !== null && !isToolUnmaskAllowed(policy, tool);
+      if (tool === null) return void 0;
+      return isToolUnmaskAllowed(policy, tool) ? "all" : "skip";
     }
   );
 }
@@ -1131,6 +1143,14 @@ var UnmaskTransformStream = class extends Transform {
 function createUnmaskStream(vault) {
   return new UnmaskTransformStream(vault);
 }
+var ANTHROPIC_ENVELOPE_EVENTS = /* @__PURE__ */ new Set([
+  "message_start",
+  "content_block_start",
+  "content_block_stop",
+  "message_delta",
+  "message_stop",
+  "ping"
+]);
 var isObject = (v) => typeof v === "object" && v !== null;
 function getOrCreate(map, key, create) {
   let value = map.get(key);
@@ -1185,7 +1205,11 @@ async function* unmaskAnthropicStream(events, vault, options = {}) {
     if (isObject(e) && e["type"] === "message_stop") {
       for (const index of /* @__PURE__ */ new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
     }
-    yield unmaskDeep(event, vault, { unmaskToolInputs: policy });
+    if (isObject(e) && typeof e["type"] === "string" && ANTHROPIC_ENVELOPE_EVENTS.has(e["type"])) {
+      yield unmaskDeep(event, vault, { unmaskToolInputs: policy });
+    } else {
+      yield event;
+    }
   }
   for (const index of /* @__PURE__ */ new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
 }
@@ -1197,11 +1221,11 @@ async function* unmaskOpenAIStream(chunks, vault, options = {}) {
   for await (const chunk of chunks) {
     const c = chunk;
     if (!isObject(c) || !Array.isArray(c["choices"])) {
-      yield unmaskDeep(chunk, vault, { unmaskToolInputs: policy });
+      yield chunk;
       continue;
     }
     const choices = c["choices"].map((choice) => {
-      if (!isObject(choice) || !isObject(choice["delta"])) return unmaskDeep(choice, vault, { unmaskToolInputs: policy });
+      if (!isObject(choice) || !isObject(choice["delta"])) return choice;
       const index = Number(choice["index"] ?? 0);
       const delta = { ...choice["delta"] };
       const finished = choice["finish_reason"] != null;
@@ -1214,7 +1238,7 @@ async function* unmaskOpenAIStream(chunks, vault, options = {}) {
       const toolCalls = Array.isArray(delta["tool_calls"]) ? [...delta["tool_calls"]] : [];
       const mapped = toolCalls.map((tc) => {
         if (!isObject(tc) || !isObject(tc["function"]) || typeof tc["function"]["arguments"] !== "string") {
-          return unmaskDeep(tc, vault, { unmaskToolInputs: policy });
+          return tc;
         }
         const key = `${index}:${Number(tc["index"] ?? 0)}`;
         if (typeof tc["function"]["name"] === "string") toolNames.set(key, tc["function"]["name"]);
