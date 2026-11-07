@@ -70,7 +70,9 @@ var privateKeyPattern = {
   name: "Private Key",
   category: "credential",
   severity: "critical",
-  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[\s\S]*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
+  // The body may not run past another BEGIN marker: without that, every unterminated
+  // BEGIN rescanned to the end of the input (quadratic on many BEGINs without END).
+  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:(?!-----BEGIN )[\s\S])*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
   placeholder: "PRIVATE_KEY",
   description: "RSA, OpenSSH, DSA, EC, Encrypted, or PGP private key certificate"
 };
@@ -229,6 +231,69 @@ var mailgunApiKeyPattern = {
   placeholder: "MAILGUN_API_KEY",
   description: "Mailgun API authentication key"
 };
+var openrouterApiKeyPattern = {
+  id: "openrouter-api-key",
+  name: "OpenRouter API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bsk-or-v1-[a-f0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: "OPENROUTER_API_KEY",
+  description: "OpenRouter API key (sk-or-v1-...)"
+};
+var groqApiKeyPattern = {
+  id: "groq-api-key",
+  name: "Groq API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bgsk_[A-Za-z0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: "GROQ_API_KEY",
+  description: "Groq API key (gsk_...)"
+};
+var xaiApiKeyPattern = {
+  id: "xai-api-key",
+  name: "xAI API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bxai-[A-Za-z0-9]{60,}(?![A-Za-z0-9_])/g,
+  placeholder: "XAI_API_KEY",
+  description: "xAI (Grok) API key (xai-...)"
+};
+var perplexityApiKeyPattern = {
+  id: "perplexity-api-key",
+  name: "Perplexity API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bpplx-[A-Za-z0-9]{32,}(?![A-Za-z0-9_])/g,
+  placeholder: "PERPLEXITY_API_KEY",
+  description: "Perplexity API key (pplx-...)"
+};
+var replicateApiTokenPattern = {
+  id: "replicate-api-token",
+  name: "Replicate API Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\br8_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: "REPLICATE_API_TOKEN",
+  description: "Replicate API token (r8_...)"
+};
+var huggingFaceOrgTokenPattern = {
+  id: "huggingface-org-token",
+  name: "Hugging Face Organization Token",
+  category: "credential",
+  severity: "high",
+  regex: /\bapi_org_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: "HUGGINGFACE_ORG_TOKEN",
+  description: "Hugging Face organization API token (api_org_...)"
+};
+var langsmithApiKeyPattern = {
+  id: "langsmith-api-key",
+  name: "LangSmith API Key",
+  category: "credential",
+  severity: "high",
+  regex: /\blsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}(?![A-Za-z0-9_])/g,
+  placeholder: "LANGSMITH_API_KEY",
+  description: "LangSmith / LangChain personal or service key (lsv2_pt_ / lsv2_sk_)"
+};
 var CREDENTIAL_PATTERNS = [
   anthropicApiKeyPattern,
   openaiApiKeyPattern,
@@ -254,7 +319,14 @@ var CREDENTIAL_PATTERNS = [
   azureStorageKeyPattern,
   gcpOauthSecretPattern,
   digitalOceanTokenPattern,
-  mailgunApiKeyPattern
+  mailgunApiKeyPattern,
+  openrouterApiKeyPattern,
+  groqApiKeyPattern,
+  xaiApiKeyPattern,
+  perplexityApiKeyPattern,
+  replicateApiTokenPattern,
+  huggingFaceOrgTokenPattern,
+  langsmithApiKeyPattern
 ];
 
 // src/patterns/pii.ts
@@ -263,7 +335,9 @@ var emailPattern = {
   name: "Email Address",
   category: "pii",
   severity: "medium",
-  regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // RFC 5321 length limits (local part 64, domain 253, label 63) keep matching linear;
+  // unbounded quantifiers backtracked quadratically on inputs like "a-a-a-..." (80KB took 10 s).
+  regex: /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b/g,
   placeholder: "EMAIL_ADDRESS",
   description: "Standard RFC 5322 email address"
 };
@@ -350,6 +424,75 @@ var PII_PATTERNS = [
   creditCardPattern
 ];
 
+// src/patterns/vn.ts
+function hasValidProvinceCode(id) {
+  const province = Number(id.slice(0, 3));
+  return province >= 1 && province <= 96;
+}
+var vnCitizenIdPattern = {
+  id: "vn-citizen-id",
+  name: "Vietnamese Citizen ID (CCCD)",
+  category: "pii",
+  severity: "high",
+  regex: /(?<![\w$])0\d{11}(?!\d)/g,
+  placeholder: "VN_CITIZEN_ID",
+  description: "12-digit Vietnamese citizen identity card number (CCCD) with a valid province code",
+  validator: hasValidProvinceCode
+};
+var vnIdNumberPattern = {
+  id: "vn-id-number",
+  name: "Vietnamese ID Number (CMND/CCCD, with context)",
+  category: "pii",
+  severity: "high",
+  regex: /(?:CMND|CCCD|CMT|căn cước|can cuoc|chứng minh|chung minh)(?:\s+(?:số|so|no\.?))?[\s:#.=-]*(\d{9}|\d{12})(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_ID_NUMBER",
+  description: "9-digit CMND or 12-digit CCCD number preceded by an ID keyword"
+};
+var vnTaxCodePattern = {
+  id: "vn-tax-code",
+  name: "Vietnamese Tax Code (MST)",
+  category: "pii",
+  severity: "medium",
+  regex: /(?:MST|mã số thuế|ma so thue|tax\s*code)[\s:#.=-]*(\d{10}(?:-\d{3})?)(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_TAX_CODE",
+  description: "10- or 13-digit Vietnamese tax code preceded by MST / m\xE3 s\u1ED1 thu\u1EBF"
+};
+var vnBankAccountPattern = {
+  id: "vn-bank-account",
+  name: "Vietnamese Bank Account Number",
+  category: "pii",
+  severity: "high",
+  regex: /(?:STK|số tài khoản|so tai khoan|tài khoản số|tai khoan so|account\s*(?:no\.?|number))[\s:#.=-]*(\d{6,20})(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_BANK_ACCOUNT",
+  description: "Bank account number preceded by STK / s\u1ED1 t\xE0i kho\u1EA3n / account number"
+};
+var VN_PII_PATTERNS = [
+  vnCitizenIdPattern,
+  vnIdNumberPattern,
+  vnTaxCodePattern,
+  vnBankAccountPattern
+];
+
+// src/patterns/presets.ts
+var PATTERN_PRESETS = {
+  "vn-pii": VN_PII_PATTERNS
+};
+function resolvePresets(names) {
+  if (!names || names.length === 0) return [];
+  const out = [];
+  for (const name of names) {
+    const preset = PATTERN_PRESETS[name];
+    if (!preset) {
+      throw new Error(`Unknown preset "${name}". Available presets: ${Object.keys(PATTERN_PRESETS).join(", ")}`);
+    }
+    out.push(...preset);
+  }
+  return out;
+}
+
 // src/patterns/index.ts
 var DEFAULT_PATTERNS = [
   ...CREDENTIAL_PATTERNS,
@@ -361,6 +504,6 @@ var PATTERN_MAP = new Map([
   // Alias for backwards compatibility
 ]);
 
-export { CREDENTIAL_PATTERNS, DEFAULT_PATTERNS, PATTERN_MAP, PII_PATTERNS, anthropicApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, azureStorageKeyPattern, basicAuthUrlPattern, creditCardPattern, databaseUriPattern, databaseUrlPattern, digitalOceanTokenPattern, discordTokenPattern, emailPattern, gcpOauthSecretPattern, githubTokenPattern, gitlabTokenPattern, googleApiKeyPattern, huggingFaceTokenPattern, ipv4Pattern, ipv6Pattern, jwtTokenPattern, mailgunApiKeyPattern, npmTokenPattern, openaiApiKeyPattern, phonePattern, privateKeyPattern, sendgridApiKeyPattern, slackTokenPattern, ssnPattern, stripeKeyPattern, supabaseKeyPattern, telegramBotTokenPattern, twilioAccountSidPattern, twilioApiKeyPattern };
+export { CREDENTIAL_PATTERNS, DEFAULT_PATTERNS, PATTERN_MAP, PATTERN_PRESETS, PII_PATTERNS, VN_PII_PATTERNS, anthropicApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, azureStorageKeyPattern, basicAuthUrlPattern, creditCardPattern, databaseUriPattern, databaseUrlPattern, digitalOceanTokenPattern, discordTokenPattern, emailPattern, gcpOauthSecretPattern, githubTokenPattern, gitlabTokenPattern, googleApiKeyPattern, groqApiKeyPattern, huggingFaceOrgTokenPattern, huggingFaceTokenPattern, ipv4Pattern, ipv6Pattern, jwtTokenPattern, langsmithApiKeyPattern, mailgunApiKeyPattern, npmTokenPattern, openaiApiKeyPattern, openrouterApiKeyPattern, perplexityApiKeyPattern, phonePattern, privateKeyPattern, replicateApiTokenPattern, resolvePresets, sendgridApiKeyPattern, slackTokenPattern, ssnPattern, stripeKeyPattern, supabaseKeyPattern, telegramBotTokenPattern, twilioAccountSidPattern, twilioApiKeyPattern, vnBankAccountPattern, vnCitizenIdPattern, vnIdNumberPattern, vnTaxCodePattern, xaiApiKeyPattern };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

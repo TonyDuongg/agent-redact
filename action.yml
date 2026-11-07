@@ -25,6 +25,16 @@ inputs:
     description: 'Comma-separated list of directories to exclude from scanning'
     required: false
     default: 'node_modules,dist,build,.git,coverage,.turbo'
+  max-file-size:
+    description: 'Skip files larger than this many megabytes (binary files are always skipped by content sniffing)'
+    required: false
+    default: '5'
+  baseline:
+    description: 'Path to a baseline file (agent-redact --write-baseline) whose findings are ignored'
+    required: false
+  sarif-file:
+    description: 'Write a SARIF 2.1.0 report to this path (upload it with github/codeql-action/upload-sarif)'
+    required: false
 
 outputs:
   has-leaks:

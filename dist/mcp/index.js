@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { constants, existsSync, statSync, openSync, readSync, closeSync, readFileSync, realpathSync, writeFileSync, fchmodSync } from 'fs';
+import { constants, existsSync, statSync, readFileSync, realpathSync, openSync, writeFileSync, fchmodSync, closeSync, readSync } from 'fs';
 import { resolve, sep, join, dirname, basename, relative, isAbsolute } from 'path';
 import { homedir, tmpdir } from 'os';
 
@@ -86,7 +86,9 @@ var privateKeyPattern = {
   name: "Private Key",
   category: "credential",
   severity: "critical",
-  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[\s\S]*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
+  // The body may not run past another BEGIN marker: without that, every unterminated
+  // BEGIN rescanned to the end of the input (quadratic on many BEGINs without END).
+  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:(?!-----BEGIN )[\s\S])*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
   placeholder: "PRIVATE_KEY",
   description: "RSA, OpenSSH, DSA, EC, Encrypted, or PGP private key certificate"
 };
@@ -244,6 +246,69 @@ var mailgunApiKeyPattern = {
   placeholder: "MAILGUN_API_KEY",
   description: "Mailgun API authentication key"
 };
+var openrouterApiKeyPattern = {
+  id: "openrouter-api-key",
+  name: "OpenRouter API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bsk-or-v1-[a-f0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: "OPENROUTER_API_KEY",
+  description: "OpenRouter API key (sk-or-v1-...)"
+};
+var groqApiKeyPattern = {
+  id: "groq-api-key",
+  name: "Groq API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bgsk_[A-Za-z0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: "GROQ_API_KEY",
+  description: "Groq API key (gsk_...)"
+};
+var xaiApiKeyPattern = {
+  id: "xai-api-key",
+  name: "xAI API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bxai-[A-Za-z0-9]{60,}(?![A-Za-z0-9_])/g,
+  placeholder: "XAI_API_KEY",
+  description: "xAI (Grok) API key (xai-...)"
+};
+var perplexityApiKeyPattern = {
+  id: "perplexity-api-key",
+  name: "Perplexity API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bpplx-[A-Za-z0-9]{32,}(?![A-Za-z0-9_])/g,
+  placeholder: "PERPLEXITY_API_KEY",
+  description: "Perplexity API key (pplx-...)"
+};
+var replicateApiTokenPattern = {
+  id: "replicate-api-token",
+  name: "Replicate API Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\br8_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: "REPLICATE_API_TOKEN",
+  description: "Replicate API token (r8_...)"
+};
+var huggingFaceOrgTokenPattern = {
+  id: "huggingface-org-token",
+  name: "Hugging Face Organization Token",
+  category: "credential",
+  severity: "high",
+  regex: /\bapi_org_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: "HUGGINGFACE_ORG_TOKEN",
+  description: "Hugging Face organization API token (api_org_...)"
+};
+var langsmithApiKeyPattern = {
+  id: "langsmith-api-key",
+  name: "LangSmith API Key",
+  category: "credential",
+  severity: "high",
+  regex: /\blsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}(?![A-Za-z0-9_])/g,
+  placeholder: "LANGSMITH_API_KEY",
+  description: "LangSmith / LangChain personal or service key (lsv2_pt_ / lsv2_sk_)"
+};
 var CREDENTIAL_PATTERNS = [
   anthropicApiKeyPattern,
   openaiApiKeyPattern,
@@ -269,7 +334,14 @@ var CREDENTIAL_PATTERNS = [
   azureStorageKeyPattern,
   gcpOauthSecretPattern,
   digitalOceanTokenPattern,
-  mailgunApiKeyPattern
+  mailgunApiKeyPattern,
+  openrouterApiKeyPattern,
+  groqApiKeyPattern,
+  xaiApiKeyPattern,
+  perplexityApiKeyPattern,
+  replicateApiTokenPattern,
+  huggingFaceOrgTokenPattern,
+  langsmithApiKeyPattern
 ];
 
 // src/patterns/pii.ts
@@ -278,7 +350,9 @@ var emailPattern = {
   name: "Email Address",
   category: "pii",
   severity: "medium",
-  regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // RFC 5321 length limits (local part 64, domain 253, label 63) keep matching linear;
+  // unbounded quantifiers backtracked quadratically on inputs like "a-a-a-..." (80KB took 10 s).
+  regex: /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b/g,
   placeholder: "EMAIL_ADDRESS",
   description: "Standard RFC 5322 email address"
 };
@@ -365,6 +439,75 @@ var PII_PATTERNS = [
   creditCardPattern
 ];
 
+// src/patterns/vn.ts
+function hasValidProvinceCode(id) {
+  const province = Number(id.slice(0, 3));
+  return province >= 1 && province <= 96;
+}
+var vnCitizenIdPattern = {
+  id: "vn-citizen-id",
+  name: "Vietnamese Citizen ID (CCCD)",
+  category: "pii",
+  severity: "high",
+  regex: /(?<![\w$])0\d{11}(?!\d)/g,
+  placeholder: "VN_CITIZEN_ID",
+  description: "12-digit Vietnamese citizen identity card number (CCCD) with a valid province code",
+  validator: hasValidProvinceCode
+};
+var vnIdNumberPattern = {
+  id: "vn-id-number",
+  name: "Vietnamese ID Number (CMND/CCCD, with context)",
+  category: "pii",
+  severity: "high",
+  regex: /(?:CMND|CCCD|CMT|căn cước|can cuoc|chứng minh|chung minh)(?:\s+(?:số|so|no\.?))?[\s:#.=-]*(\d{9}|\d{12})(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_ID_NUMBER",
+  description: "9-digit CMND or 12-digit CCCD number preceded by an ID keyword"
+};
+var vnTaxCodePattern = {
+  id: "vn-tax-code",
+  name: "Vietnamese Tax Code (MST)",
+  category: "pii",
+  severity: "medium",
+  regex: /(?:MST|mã số thuế|ma so thue|tax\s*code)[\s:#.=-]*(\d{10}(?:-\d{3})?)(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_TAX_CODE",
+  description: "10- or 13-digit Vietnamese tax code preceded by MST / m\xE3 s\u1ED1 thu\u1EBF"
+};
+var vnBankAccountPattern = {
+  id: "vn-bank-account",
+  name: "Vietnamese Bank Account Number",
+  category: "pii",
+  severity: "high",
+  regex: /(?:STK|số tài khoản|so tai khoan|tài khoản số|tai khoan so|account\s*(?:no\.?|number))[\s:#.=-]*(\d{6,20})(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_BANK_ACCOUNT",
+  description: "Bank account number preceded by STK / s\u1ED1 t\xE0i kho\u1EA3n / account number"
+};
+var VN_PII_PATTERNS = [
+  vnCitizenIdPattern,
+  vnIdNumberPattern,
+  vnTaxCodePattern,
+  vnBankAccountPattern
+];
+
+// src/patterns/presets.ts
+var PATTERN_PRESETS = {
+  "vn-pii": VN_PII_PATTERNS
+};
+function resolvePresets(names) {
+  if (!names || names.length === 0) return [];
+  const out = [];
+  for (const name of names) {
+    const preset = PATTERN_PRESETS[name];
+    if (!preset) {
+      throw new Error(`Unknown preset "${name}". Available presets: ${Object.keys(PATTERN_PRESETS).join(", ")}`);
+    }
+    out.push(...preset);
+  }
+  return out;
+}
+
 // src/patterns/index.ts
 var DEFAULT_PATTERNS = [
   ...CREDENTIAL_PATTERNS,
@@ -429,6 +572,13 @@ function createHighEntropyPattern(config = {}) {
 }
 
 // src/core/vault.ts
+function collectPlaceholderLiterals(text) {
+  const found = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(/\[[^[\]\r\n]{1,256}_\d+\]/g)) {
+    found.add(m[0]);
+  }
+  return found;
+}
 var Vault = class _Vault {
   placeholderToEntry = /* @__PURE__ */ new Map();
   placeholderToEntries = /* @__PURE__ */ new Map();
@@ -437,8 +587,30 @@ var Vault = class _Vault {
   maxEntries;
   /** Names (never values) of placeholders dropped by the size cap, oldest first */
   evictedPlaceholders = /* @__PURE__ */ new Set();
+  /** Bumped on every change to the placeholder set; invalidates the cached unmask regex */
+  mutations = 0;
+  unmaskRegexCache;
   constructor(options) {
     this.maxEntries = options?.maxEntries;
+  }
+  /**
+   * True when `prefix` is the beginning of at least one known placeholder.
+   * Used by streaming unmaskers to decide whether a chunk tail must be held back.
+   */
+  hasPlaceholderPrefix(prefix) {
+    for (const placeholder of this.placeholderToEntries.keys()) {
+      if (placeholder.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+  getUnmaskRegex() {
+    if (this.unmaskRegexCache?.mutations !== this.mutations) {
+      const escaped = Array.from(this.placeholderToEntries.keys()).sort((a, b) => b.length - a.length).map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+      this.unmaskRegexCache = { mutations: this.mutations, regex: new RegExp(escaped.join("|"), "g") };
+    }
+    const { regex } = this.unmaskRegexCache;
+    regex.lastIndex = 0;
+    return regex;
   }
   evictOldestIfNeeded() {
     if (this.maxEntries && this.originalToPlaceholder.size >= this.maxEntries) {
@@ -451,6 +623,7 @@ var Vault = class _Vault {
         }
         this.placeholderToEntry.delete(oldestPlaceholder);
         this.placeholderToEntries.delete(oldestPlaceholder);
+        this.mutations++;
         this.rememberEvicted(oldestPlaceholder);
       }
     }
@@ -486,7 +659,8 @@ var Vault = class _Vault {
     this.evictOldestIfNeeded();
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
-      while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
+      const isTaken = typeof existingText === "string" ? (p) => existingText.includes(p) : (p) => existingText.has(p);
+      while (isTaken(`[${pattern.placeholder}_${count}]`)) {
         count++;
       }
     }
@@ -502,6 +676,7 @@ var Vault = class _Vault {
     this.placeholderToEntry.set(placeholder, entry);
     this.placeholderToEntries.set(placeholder, [entry]);
     this.originalToPlaceholder.set(original, placeholder);
+    this.mutations++;
     return placeholder;
   }
   /**
@@ -514,29 +689,29 @@ var Vault = class _Vault {
    * Replaces all placeholders in a string back with their original secrets
    * in a deterministic, collision-free single regex pass. Handles multiple
    * secrets mapped to identical custom placeholders sequentially.
+   *
+   * @param encode Optional transform applied to each restored secret, e.g. JSON string
+   *   escaping when the placeholder sits inside a JSON document.
    */
-  unmask(text) {
+  unmask(text, encode) {
     if (this.placeholderToEntries.size === 0 || !text) {
       return text;
     }
-    const placeholders = Array.from(this.placeholderToEntries.keys()).sort(
-      (a, b) => b.length - a.length
-    );
-    const escaped = placeholders.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    const regex = new RegExp(escaped.join("|"), "g");
+    const regex = this.getUnmaskRegex();
     const occurrences = /* @__PURE__ */ new Map();
+    const out = (secret) => encode ? encode(secret) : secret;
     return text.replace(regex, (matched) => {
       const list = this.placeholderToEntries.get(matched);
       if (!list || list.length === 0) {
         return matched;
       }
       if (list.length === 1) {
-        return list[0].original;
+        return out(list[0].original);
       }
       const idx = occurrences.get(matched) ?? 0;
       occurrences.set(matched, idx + 1);
       const entry = list[idx % list.length];
-      return entry.original;
+      return out(entry.original);
     });
   }
   /**
@@ -553,6 +728,7 @@ var Vault = class _Vault {
     }
     this.placeholderToEntries.set(entry.placeholder, existingList);
     this.originalToPlaceholder.set(entry.original, entry.placeholder);
+    this.mutations++;
     const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
     if (match && match[1] && match[2]) {
       const prefix = match[1];
@@ -622,6 +798,7 @@ var Vault = class _Vault {
     this.originalToPlaceholder.clear();
     this.counters.clear();
     this.evictedPlaceholders.clear();
+    this.mutations++;
   }
 };
 
@@ -660,13 +837,14 @@ var RedactEngine = class {
     const startTime = performance.now();
     const reversible = options?.reversible ?? false;
     const vault = options?.vault ?? this.vault ?? (reversible ? new Vault() : void 0);
-    let activePatterns = options?.customPatterns ? [...this.patterns, ...options.customPatterns] : [...this.patterns];
+    const presetPatterns = resolvePresets(options?.presets);
+    let activePatterns = [...this.patterns, ...presetPatterns, ...options?.customPatterns ?? []];
     if (options?.detectHighEntropy) {
       activePatterns.push(createHighEntropyPattern(options.entropy));
     }
     if (options?.include && options.include.length > 0) {
       const includeSet = new Set(options.include);
-      const customIds = new Set((options.customPatterns ?? []).map((p) => p.id));
+      const customIds = new Set([...options.customPatterns ?? [], ...presetPatterns].map((p) => p.id));
       activePatterns = activePatterns.filter(
         (p) => includeSet.has(p.id) || customIds.has(p.id) || options.detectHighEntropy && p.id === "generic-high-entropy-secret"
       );
@@ -725,19 +903,22 @@ var RedactEngine = class {
       return a.startIndex - b.startIndex;
     });
     const accepted = [];
+    const covered = rawMatches.length > 1 ? new Uint8Array(text.length) : void 0;
     for (const candidate of rawMatches) {
-      const hasOverlap = accepted.some(
-        (acc) => candidate.startIndex < acc.endIndex && acc.startIndex < candidate.endIndex
-      );
-      if (!hasOverlap) {
-        accepted.push(candidate);
+      if (covered) {
+        if (covered.subarray(candidate.startIndex, candidate.endIndex).includes(1)) {
+          continue;
+        }
+        covered.fill(1, candidate.startIndex, candidate.endIndex);
       }
+      accepted.push(candidate);
     }
     accepted.sort((a, b) => a.startIndex - b.startIndex);
     const matches = [];
     const stats = {};
     let redactedText = "";
     let cursor = 0;
+    let literalPlaceholders;
     for (let i = 0; i < accepted.length; i++) {
       const m = accepted[i];
       let replacement;
@@ -764,7 +945,8 @@ var RedactEngine = class {
           });
         }
       } else if (reversible && vault) {
-        replacement = vault.getOrCreate(m.secret, m.pattern, text);
+        literalPlaceholders ??= collectPlaceholderLiterals(text);
+        replacement = vault.getOrCreate(m.secret, m.pattern, literalPlaceholders);
       } else {
         replacement = `[REDACTED_${m.pattern.placeholder}]`;
       }
@@ -835,6 +1017,20 @@ function redact(text, options) {
 function unmask(text, vault) {
   return defaultEngine.unmask(text, vault);
 }
+var DEFAULT_MAX_SCAN_BYTES = 5 * 1024 * 1024;
+function isBinaryFile(path, sampleSize = 8192) {
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(sampleSize);
+    const read = readSync(fd, buf, 0, sampleSize, 0);
+    return buf.subarray(0, read).includes(0);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// src/version.ts
+var VERSION = "0.1.5";
 
 // src/mcp/server.ts
 function realpathOrNearest(p) {
@@ -925,7 +1121,7 @@ function createMcpServer(options = {}) {
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
   const server = new McpServer({
     name: "agent-redact",
-    version: "0.1.5"
+    version: VERSION
   });
   server.tool(
     "redact_text",
@@ -1045,9 +1241,8 @@ function createMcpServer(options = {}) {
           ]
         };
       }
-      const MAX_SCAN_BYTES = 5 * 1024 * 1024;
       const fileStat = statSync(resolvedFile);
-      if (fileStat.size > MAX_SCAN_BYTES) {
+      if (fileStat.size > DEFAULT_MAX_SCAN_BYTES) {
         return {
           isError: true,
           content: [
@@ -1059,15 +1254,7 @@ function createMcpServer(options = {}) {
         };
       }
       if (fileStat.size > 0) {
-        const checkBytes = Math.min(8192, fileStat.size);
-        const buf = Buffer.alloc(checkBytes);
-        const fd = openSync(resolvedFile, "r");
-        try {
-          readSync(fd, buf, 0, checkBytes, 0);
-        } finally {
-          closeSync(fd);
-        }
-        if (buf.includes(0)) {
+        if (isBinaryFile(resolvedFile)) {
           return {
             isError: true,
             content: [

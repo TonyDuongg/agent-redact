@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-redact"
+version = "0.1.5"
+description = "Secret & PII redaction for Python AI agents (wrapper around the agent-redact CLI)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Tony Duong" }]
+keywords = ["security", "redaction", "secrets", "pii", "llm", "ai-agents"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Security",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/TonyDuongg/agent-redact"
+Issues = "https://github.com/TonyDuongg/agent-redact/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_redact"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

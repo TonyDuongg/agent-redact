@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### 🔧 Tooling
+- **TypeScript 5.9 → 6.0.3:** `tsconfig.json` now lists `"types": ["node"]` explicitly, because TS 6 no longer auto-includes `@types`. It also sets `ignoreDeprecations: "6.0"`, because tsup's d.ts step passes the deprecated `baseUrl`. TypeScript 7 (native) is not usable yet: tsup's `rollup-plugin-dts` needs the JS compiler API that TS 7 does not ship.
+- **Vitest 3 → 4.1.** Vitest 5 and tsup 9 require Node ≥ 22.12 / 22.18, so they would drop the Node 20 CI leg. They are left for a separate decision.
+- **esbuild pinned to ^0.28.1 via `overrides`:** this fixes GHSA-g7r4-m6w7-qqqr (low, dev server only), which tsup 8's range could not reach. The only output difference is esbuild's lazy-init helper.
+
+### 🐍 Python package (`python/`)
+- **`agent-redact` for Python:** a dependency-free wrapper around the CLI, so it uses exactly the same engine.
+  - `redact()` returns text plus matches, without secret values.
+  - `scan()` covers paths or the git index.
+  - `Session` provides reversible masking across calls. Its vault is encrypted with a random per-session passphrase that never touches disk, and is deleted on close.
+- **CLI discovery** (hardened after automated security review): an absolute `AGENT_REDACT_CLI`, then a global `agent-redact` resolved to its JS entry, then a one-time `npm install --ignore-scripts` of the same version into a private user cache. The CLI is always started as `node <absolute path>`. `.cmd`/`.bat` shims and `npx` are never used, and executables are never taken from the current directory or relative `PATH` entries, so a scanned repository cannot plant a binary or an `.npmrc`. Python 3.10+ (3.9 is EOL and no longer available on CI runners).
+- **CI:** new Python job (Ubuntu and Windows, Python 3.9 and 3.13). A test keeps the Python version in sync with `package.json`.
+- **New CLI flags:** `--vault-in <file>` continues an existing (encrypted) vault, so numbering carries over between runs; `--preset <a,b>` enables presets from the command line.
+
+### 🎯 Detection
+- **New AI/LLM provider keys:** OpenRouter (`sk-or-v1-`), Groq (`gsk_`), xAI (`xai-`), Perplexity (`pplx-`), Replicate (`r8_`), Hugging Face org tokens (`api_org_`), LangSmith (`lsv2_pt_` / `lsv2_sk_`). Lengths are lower bounds, so longer future keys are still caught.
+- **`vn-pii` preset (opt-in):** Vietnamese CCCD (with province-code validation), CMND/CCCD after an ID keyword, tax code (MST) and bank account numbers after their keywords. Enable it with `presets: ['vn-pii']` (option or config). Unknown preset names throw.
+- **Labelled corpus test:** positive samples for every built-in pattern (enforced) and a negative corpus of realistic non-secret text (0 false positives).
+
+### 🔐 Encrypted vaults
+- **`--vault-key-env <VAR>`** (or `AGENT_REDACT_VAULT_KEY`) encrypts `--vault-out` files with AES-256-GCM, using a scrypt-derived key and an authenticated header. `--unmask` decrypts them and refuses encrypted vaults without a key. Writing an unencrypted vault prints a warning.
+- **Library helpers:** `encryptVaultJson`, `decryptVaultJson`, `isEncryptedVault`.
+
+### ✨ Repository scanning & CI
+- **Scan mode:** `agent-redact <dir|files...>` reports findings (file:line:column, never values) and exits 1 when any are found. Inside git it uses `git ls-files --cached --others --exclude-standard`, so `.gitignore` is honoured exactly; outside git, common build and dependency directories are skipped. Binary and oversized files are skipped.
+- **`--staged`:** scans the git index, i.e. exactly what is about to be committed.
+- **`--format json|sarif` and `--report <file>`:** SARIF 2.1.0 with `security-severity`, for GitHub code scanning.
+- **Baselines:** `--write-baseline` / `--baseline` store fingerprints only (`sha256(pattern, file, value)`).
+- **Inline ignore:** `agent-redact-ignore` (same line) and `agent-redact-ignore-next-line`. Honoured only in scan/audit modes, never for redaction, and never by the Claude Code hook.
+- **GitHub Action:**
+  - new `baseline` and `sarif-file` inputs;
+  - annotations now carry the column;
+  - line numbers come from a line-start index instead of re-splitting the file for every finding.
+- **Multi-file in-place mode** accepts directories, skips binaries and rewrites only files that contain secrets.
+
+### 🛡️ Claude Code hook
+- **`agent-redact hook [--block-writes] [--config <path>]`** reads the hook event JSON on stdin and exits 2 to block. It covers:
+  - prompts containing secrets;
+  - `Read` of files with secrets;
+  - `Grep` in any output mode when the searched files include a secret file. The regex is never evaluated (no ripgrep/JS differential, no ReDoS), and only simple globs narrow the check;
+  - `Bash` commands that contain secrets or print secret files;
+  - other tools whose input contains secrets or whose path arguments point at a secret file.
+
+  Messages name secret types, never values.
+- **Fail closed:**
+  - large files are scanned in full, and reads above 64 MB are refused;
+  - UTF-16 is decoded, and printable strings in binaries are scanned;
+  - unexpected errors block;
+  - inline ignore comments are not honoured;
+  - from the agent-writable project config, only additive settings are used (`allowlist`/`include`/`exclude` require an explicit `--config`).
+
+### 🔒 Git hardening
+- Scan mode runs git with `core.fsmonitor=false` (no untracked cache, no pager, and no `core.excludesFile`, so a repo-local exclude cannot hide files). It descends into submodules. A test showed that a scanned directory's own `.git/config` could otherwise execute a command through `git ls-files`.
+- Staged content is read with `git cat-file blob`, which applies no textconv or filters.
+
+### 🔧 Internal
+- **Single version source:** `src/version.ts`, used by the CLI, MCP server and SARIF reports; a test keeps it equal to `package.json`.
+
+### ✨ Streaming & SDK round-trips
+- **`StreamingUnmasker`, `unmaskTextStream`, `createUnmaskStream`:** restore placeholders in streamed LLM output even when one is split across chunks. A chunk tail is held back only while it is the start of a placeholder that exists in the vault, so ordinary `[` text is never delayed.
+- **`unmaskAnthropicStream` / `unmaskOpenAIStream`:** adapters for the Messages and Chat Completions event streams, covering text deltas and tool-call JSON (restored secrets are JSON-escaped, so `partial_json` / `arguments` stay valid).
+- **`redactDeep` / `unmaskDeep`:** sanitize or restore every string in a request/response object with one shared vault, including `tool_use` inputs. Base64 payloads and `data:` URLs are skipped. Inputs are never mutated.
+- **`wrapAgent`:** now also deep-unmasks plain-object responses and stream-unmasks `async function*` responses; class instances are still returned untouched. ⚠️ Object responses are now returned as a restored deep copy, no longer the same reference.
+- **Exfiltration guard (deny by default):** model-generated tool-call inputs are **not** unmasked by default, because a prompt-injected model could otherwise route a secret into a network-bound tool argument. Covered shapes:
+  - Anthropic `tool_use` / `server_tool_use` / `mcp_tool_use` `input`, and `partial_json`;
+  - OpenAI `arguments`, with or without `name`;
+  - Responses API `function_call_arguments` events;
+  - Gemini and LangChain `args`, and Vercel AI SDK `input`.
+
+  Opt in with `unmaskToolInputs: true` or a per-tool predicate (`unmaskDeep`, both stream adapters, `wrapAgent`). The stream adapters pass unrecognised event/chunk shapes through unchanged (fail closed).
+- **Base64 fails closed in `redactDeep`:** content that is not actually base64 is redacted normally, and text documents encoded as base64 are decoded, redacted and re-encoded. Only genuine binary is skipped.
+- **`Vault.unmask(text, encode?)`:** optional `encode` for restored secrets. The unmask regex is cached between calls instead of being rebuilt every time.
+- README: removed the claim of Fastify/Next.js middleware (only Express/Connect middleware exists).
+
+### ⚡ Performance (quadratic → linear)
+- **Overlap resolution** used a nested scan over accepted matches (O(m²)): a 2 MB log with 100k IP addresses took 18.8 s although the regexes ran in 17 ms. A coverage bitmap now makes it linear (~0.3 s).
+- **Reversible placeholder allocation** rescanned the whole document for every new secret: 40k emails took 11 s, now ~0.2 s.
+- **Email pattern ReDoS:** unbounded quantifiers backtracked quadratically, so 80 KB of `a-a-a-…` took 10 s, which is a denial-of-service vector through the Express middleware and the MCP server. RFC 5321 length limits make it linear with identical matches on normal text.
+- **Private key pattern:** many `BEGIN` markers without `END` rescanned to the end of input (1.3 MB took 4.3 s); the body can no longer run past another `BEGIN`.
+- New `tests/perf.test.ts` guards these cases with generous time thresholds.
+
+### 🔍 GitHub Action
+- Binary files are skipped by content sniffing (NUL byte in the first 8 KB, like git), not only by extension. Fonts, videos, jars and extensionless binaries previously produced false findings.
+- New `max-file-size` input (MB, default 5); oversized files are skipped and reported in the log and step summary.
+- File selection is shared with the MCP server through `src/core/files.ts`.
+
+### 📦 Packaging
+- The npm tarball no longer ships source maps, the GitHub Action bundle or the unused CJS CLI: 329.5 kB → 93.7 kB.
+
+### 📝 Docs
+- Pattern matrix lists all built-in patterns (basic-auth URLs, Telegram, Twilio API key, Azure, GCP OAuth, DigitalOcean, Mailgun, Vietnamese phones); JWT severity corrected to CRITICAL.
+- Replaced inaccurate "zero-latency", "O(1) memory" and "zero runtime dependencies" claims with measured numbers. The core engine is dependency-free, but the MCP server and CLI use `@modelcontextprotocol/sdk` and `zod`.
+
+---
+
 ## [0.1.5] - 2026-11-05
 
 ### 🔒 Leak fixes

@@ -1,8 +1,23 @@
 // Core Engine & Vault
 export { RedactEngine, redact, unmask } from './core/engine.js';
 export { Vault } from './core/vault.js';
+export { encryptVaultJson, decryptVaultJson, isEncryptedVault } from './core/vault-crypto.js';
 export { createRedactStream, RedactTransformStream } from './core/stream.js';
 export type { RedactStreamOptions } from './core/stream.js';
+
+// Streaming & deep unmasking (LLM token streams, SDK request/response objects)
+export {
+  StreamingUnmasker,
+  unmaskTextStream,
+  createUnmaskStream,
+  UnmaskTransformStream,
+  unmaskAnthropicStream,
+  unmaskOpenAIStream,
+  jsonStringEscape
+} from './core/unmask-stream.js';
+export type { StreamAdapterOptions } from './core/unmask-stream.js';
+export { redactDeep, unmaskDeep, isToolUnmaskAllowed } from './core/deep.js';
+export type { DeepRedactOptions, DeepRedactResult, UnmaskDeepOptions, ToolInputPolicy } from './core/deep.js';
 
 // Configuration & Extensibility
 export { loadConfig, parseRegexString, resolveCustomPattern } from './core/config.js';
