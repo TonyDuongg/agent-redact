@@ -1,6 +1,18 @@
 import type { RedactPattern, VaultEntry } from './types.js';
 
 /**
+ * Collects every "[NAME_<number>]" token already present in `text`, so new placeholders
+ * never collide with literal text. One linear pass per document.
+ */
+export function collectPlaceholderLiterals(text: string): Set<string> {
+  const found = new Set<string>();
+  for (const m of text.matchAll(/\[[^[\]\r\n]{1,256}_\d+\]/g)) {
+    found.add(m[0]);
+  }
+  return found;
+}
+
+/**
  * Vault manages session-scoped mappings between sensitive tokens
  * and their reversible placeholders.
  */
@@ -61,7 +73,11 @@ export class Vault {
    * for the given secret token. Optionally ensures placeholder does not collide
    * with literal text already in the document.
    */
-  public getOrCreate(original: string, pattern: RedactPattern, existingText?: string): string {
+  public getOrCreate(
+    original: string,
+    pattern: RedactPattern,
+    existingText?: string | ReadonlySet<string>
+  ): string {
     const existing = this.originalToPlaceholder.get(original);
     if (existing) {
       return existing;
@@ -71,7 +87,13 @@ export class Vault {
 
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
-      while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
+      // A Set of literal placeholder-shaped tokens (see collectPlaceholderLiterals) avoids
+      // rescanning the whole document for every new secret, which was quadratic.
+      const isTaken =
+        typeof existingText === 'string'
+          ? (p: string) => existingText.includes(p)
+          : (p: string) => existingText.has(p);
+      while (isTaken(`[${pattern.placeholder}_${count}]`)) {
         count++;
       }
     }

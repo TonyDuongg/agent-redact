@@ -1,4 +1,4 @@
-import { statSync, readFileSync, existsSync, readdirSync, appendFileSync } from 'fs';
+import { statSync, existsSync, readFileSync, readdirSync, appendFileSync, openSync, readSync, closeSync } from 'fs';
 import { relative, resolve, join, extname } from 'path';
 
 // src/action/index.ts
@@ -75,7 +75,9 @@ var privateKeyPattern = {
   name: "Private Key",
   category: "credential",
   severity: "critical",
-  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[\s\S]*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
+  // The body may not run past another BEGIN marker: without that, every unterminated
+  // BEGIN rescanned to the end of the input (quadratic on many BEGINs without END).
+  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:(?!-----BEGIN )[\s\S])*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
   placeholder: "PRIVATE_KEY",
   description: "RSA, OpenSSH, DSA, EC, Encrypted, or PGP private key certificate"
 };
@@ -267,7 +269,9 @@ var emailPattern = {
   name: "Email Address",
   category: "pii",
   severity: "medium",
-  regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // RFC 5321 length limits (local part 64, domain 253, label 63) keep matching linear;
+  // unbounded quantifiers backtracked quadratically on inputs like "a-a-a-..." (80KB took 10 s).
+  regex: /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b/g,
   placeholder: "EMAIL_ADDRESS",
   description: "Standard RFC 5322 email address"
 };
@@ -418,6 +422,13 @@ function createHighEntropyPattern(config = {}) {
 }
 
 // src/core/vault.ts
+function collectPlaceholderLiterals(text) {
+  const found = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(/\[[^[\]\r\n]{1,256}_\d+\]/g)) {
+    found.add(m[0]);
+  }
+  return found;
+}
 var Vault = class _Vault {
   placeholderToEntry = /* @__PURE__ */ new Map();
   placeholderToEntries = /* @__PURE__ */ new Map();
@@ -475,7 +486,8 @@ var Vault = class _Vault {
     this.evictOldestIfNeeded();
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
-      while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
+      const isTaken = typeof existingText === "string" ? (p) => existingText.includes(p) : (p) => existingText.has(p);
+      while (isTaken(`[${pattern.placeholder}_${count}]`)) {
         count++;
       }
     }
@@ -714,19 +726,22 @@ var RedactEngine = class {
       return a.startIndex - b.startIndex;
     });
     const accepted = [];
+    const covered = rawMatches.length > 1 ? new Uint8Array(text.length) : void 0;
     for (const candidate of rawMatches) {
-      const hasOverlap = accepted.some(
-        (acc) => candidate.startIndex < acc.endIndex && acc.startIndex < candidate.endIndex
-      );
-      if (!hasOverlap) {
-        accepted.push(candidate);
+      if (covered) {
+        if (covered.subarray(candidate.startIndex, candidate.endIndex).includes(1)) {
+          continue;
+        }
+        covered.fill(1, candidate.startIndex, candidate.endIndex);
       }
+      accepted.push(candidate);
     }
     accepted.sort((a, b) => a.startIndex - b.startIndex);
     const matches = [];
     const stats = {};
     let redactedText = "";
     let cursor = 0;
+    let literalPlaceholders;
     for (let i = 0; i < accepted.length; i++) {
       const m = accepted[i];
       let replacement;
@@ -753,7 +768,8 @@ var RedactEngine = class {
           });
         }
       } else if (reversible && vault) {
-        replacement = vault.getOrCreate(m.secret, m.pattern, text);
+        literalPlaceholders ??= collectPlaceholderLiterals(text);
+        replacement = vault.getOrCreate(m.secret, m.pattern, literalPlaceholders);
       } else {
         replacement = `[REDACTED_${m.pattern.placeholder}]`;
       }
@@ -889,9 +905,8 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
     throw new Error(`Failed to parse agent-redact config at ${targetPath}: ${msg}`);
   }
 }
-
-// src/action/index.ts
-var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
+var DEFAULT_MAX_SCAN_BYTES = 5 * 1024 * 1024;
+var KNOWN_BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
   ".png",
   ".jpg",
   ".jpeg",
@@ -899,21 +914,102 @@ var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
   ".ico",
   ".webp",
   ".svg",
+  ".bmp",
+  ".tif",
+  ".tiff",
+  ".avif",
+  ".psd",
   ".wasm",
   ".zip",
   ".tar",
   ".gz",
+  ".tgz",
+  ".bz2",
+  ".xz",
   ".7z",
+  ".rar",
+  ".zst",
   ".exe",
   ".dll",
   ".so",
   ".dylib",
+  ".node",
+  ".o",
+  ".a",
+  ".lib",
+  ".class",
+  ".jar",
+  ".pyc",
+  ".whl",
   ".pdf",
   ".docx",
   ".xlsx",
+  ".pptx",
   ".bin",
-  ".dat"
+  ".dat",
+  ".db",
+  ".sqlite",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+  ".eot",
+  ".mp3",
+  ".mp4",
+  ".mov",
+  ".avi",
+  ".mkv",
+  ".webm",
+  ".wav",
+  ".flac",
+  ".ogg"
 ]);
+function hasKnownBinaryExtension(path) {
+  return KNOWN_BINARY_EXTENSIONS.has(extname(path).toLowerCase());
+}
+function isBinaryFile(path, sampleSize = 8192) {
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(sampleSize);
+    const read = readSync(fd, buf, 0, sampleSize, 0);
+    return buf.subarray(0, read).includes(0);
+  } finally {
+    closeSync(fd);
+  }
+}
+function readTextForScan(path, maxBytes = DEFAULT_MAX_SCAN_BYTES) {
+  try {
+    const { size } = statSync(path);
+    if (size > maxBytes) return { ok: false, reason: "too-large", size };
+    if (hasKnownBinaryExtension(path) || size > 0 && isBinaryFile(path)) {
+      return { ok: false, reason: "binary", size };
+    }
+    return { ok: true, content: readFileSync(path, "utf-8") };
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+}
+function walkFiles(dir, excludeDirs, result = []) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return result;
+  }
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== ".git" && !excludeDirs.has(entry.name)) {
+        walkFiles(fullPath, excludeDirs, result);
+      }
+    } else if (entry.isFile() && !hasKnownBinaryExtension(entry.name)) {
+      result.push(fullPath);
+    }
+  }
+  return result;
+}
+
+// src/action/index.ts
 function getInput(name, fallback = "") {
   const keyWithUnderscore = `INPUT_${name.replace(/-/g, "_").toUpperCase()}`;
   const keyWithHyphen = `INPUT_${name.toUpperCase()}`;
@@ -932,29 +1028,6 @@ function writeSummary(markdown) {
   if (summaryFile && existsSync(summaryFile)) {
     appendFileSync(summaryFile, markdown + "\n\n", "utf-8");
   }
-}
-function collectFiles(dir, excludeDirs, result = []) {
-  try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name.startsWith(".") && entry.name !== "." && entry.name !== "..") {
-        if (entry.name === ".git") continue;
-      }
-      const fullPath = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (!excludeDirs.has(entry.name)) {
-          collectFiles(fullPath, excludeDirs, result);
-        }
-      } else if (entry.isFile()) {
-        const ext = extname(entry.name).toLowerCase();
-        if (!BINARY_EXTENSIONS.has(ext)) {
-          result.push(fullPath);
-        }
-      }
-    }
-  } catch {
-  }
-  return result;
 }
 function escapeCommandData(value) {
   return value.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
@@ -977,6 +1050,8 @@ async function runAction() {
   const excludeDirs = new Set(
     excludeInput.split(",").map((s) => s.trim()).filter(Boolean)
   );
+  const maxFileSizeMb = Number(getInput("max-file-size", "5"));
+  const maxBytes = Number.isFinite(maxFileSizeMb) && maxFileSizeMb > 0 ? Math.floor(maxFileSizeMb * 1024 * 1024) : DEFAULT_MAX_SCAN_BYTES;
   console.log(`[agent-redact] Starting security scan on: ${scanPath}`);
   console.log(`[agent-redact] Fail on leak: ${failOnLeak} | Entropy detection: ${detectEntropy}`);
   const loadedConfig = loadConfig(configPath);
@@ -985,18 +1060,23 @@ async function runAction() {
   if (stat.isFile()) {
     filesToScan.push(scanPath);
   } else {
-    collectFiles(scanPath, excludeDirs, filesToScan);
+    walkFiles(scanPath, excludeDirs, filesToScan);
   }
   console.log(`[agent-redact] Discovered ${filesToScan.length} text files to analyze.`);
   const allLeaks = [];
+  const skipped = {
+    binary: 0,
+    "too-large": 0,
+    unreadable: 0
+  };
   const startTime = performance.now();
   for (const filePath of filesToScan) {
-    let content;
-    try {
-      content = readFileSync(filePath, "utf-8");
-    } catch {
+    const read = readTextForScan(filePath, maxBytes);
+    if (!read.ok) {
+      skipped[read.reason]++;
       continue;
     }
+    const content = read.content;
     const result = redact(content, {
       include: loadedConfig?.include,
       exclude: loadedConfig?.exclude,
@@ -1021,6 +1101,11 @@ async function runAction() {
   const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
   const totalLeaks = allLeaks.length;
   const hasLeaks = totalLeaks > 0;
+  const skippedTotal = skipped.binary + skipped["too-large"] + skipped.unreadable;
+  const skippedSummary = `Skipped ${skippedTotal} file(s): ${skipped.binary} binary, ${skipped["too-large"]} larger than ${(maxBytes / (1024 * 1024)).toFixed(2)} MB, ${skipped.unreadable} unreadable.`;
+  if (skippedTotal > 0) {
+    console.log(`[agent-redact] ${skippedSummary}`);
+  }
   setOutput("has-leaks", String(hasLeaks));
   setOutput("total-leaks", String(totalLeaks));
   let summaryMd = `## \u{1F6E1}\uFE0F agent-redact Security Scan Report
@@ -1028,8 +1113,12 @@ async function runAction() {
 `;
   summaryMd += `* **Status**: ${hasLeaks ? "\u274C **Secrets Detected**" : "\u2705 **No Leaks Found**"}
 `;
-  summaryMd += `* **Files Scanned**: ${filesToScan.length}
+  summaryMd += `* **Files Scanned**: ${filesToScan.length - skippedTotal}
 `;
+  if (skippedTotal > 0) {
+    summaryMd += `* **Files Skipped**: ${skippedSummary}
+`;
+  }
   summaryMd += `* **Total Leaks Detected**: ${totalLeaks}
 `;
   summaryMd += `* **Scan Duration**: ${durationMs}ms

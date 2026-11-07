@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### ⚡ Performance (quadratic → linear)
+- **Overlap resolution** used a nested scan over accepted matches (O(m²)): a 2 MB log with 100k IP addresses took 18.8 s although the regexes ran in 17 ms. A coverage bitmap now makes it linear (~0.3 s).
+- **Reversible placeholder allocation** rescanned the whole document for every new secret: 40k emails took 11 s, now ~0.2 s.
+- **Email pattern ReDoS:** unbounded quantifiers backtracked quadratically, so 80 KB of `a-a-a-…` took 10 s, which is a denial-of-service vector through the Express middleware and the MCP server. RFC 5321 length limits make it linear with identical matches on normal text.
+- **Private key pattern:** many `BEGIN` markers without `END` rescanned to the end of input (1.3 MB took 4.3 s); the body can no longer run past another `BEGIN`.
+- New `tests/perf.test.ts` guards these cases with generous time thresholds.
+
+### 🔍 GitHub Action
+- Binary files are skipped by content sniffing (NUL byte in the first 8 KB, like git), not only by extension. Fonts, videos, jars and extensionless binaries previously produced false findings.
+- New `max-file-size` input (MB, default 5); oversized files are skipped and reported in the log and step summary.
+- File selection is shared with the MCP server through `src/core/files.ts`.
+
+### 📦 Packaging
+- The npm tarball no longer ships source maps, the GitHub Action bundle or the unused CJS CLI: 329.5 kB → 93.7 kB.
+
+### 📝 Docs
+- Pattern matrix lists all built-in patterns (basic-auth URLs, Telegram, Twilio API key, Azure, GCP OAuth, DigitalOcean, Mailgun, Vietnamese phones); JWT severity corrected to CRITICAL.
+- Replaced inaccurate "zero-latency", "O(1) memory" and "zero runtime dependencies" claims with measured numbers. The core engine is dependency-free, but the MCP server and CLI use `@modelcontextprotocol/sdk` and `zod`.
+
+---
+
 ## [0.1.5] - 2026-11-05
 
 ### 🔒 Leak fixes
