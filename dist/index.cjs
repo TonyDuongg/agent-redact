@@ -77,7 +77,9 @@ var privateKeyPattern = {
   name: "Private Key",
   category: "credential",
   severity: "critical",
-  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[\s\S]*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
+  // The body may not run past another BEGIN marker: without that, every unterminated
+  // BEGIN rescanned to the end of the input (quadratic on many BEGINs without END).
+  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:(?!-----BEGIN )[\s\S])*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
   placeholder: "PRIVATE_KEY",
   description: "RSA, OpenSSH, DSA, EC, Encrypted, or PGP private key certificate"
 };
@@ -270,7 +272,9 @@ var emailPattern = {
   name: "Email Address",
   category: "pii",
   severity: "medium",
-  regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // RFC 5321 length limits (local part 64, domain 253, label 63) keep matching linear;
+  // unbounded quantifiers backtracked quadratically on inputs like "a-a-a-..." (80KB took 10 s).
+  regex: /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b/g,
   placeholder: "EMAIL_ADDRESS",
   description: "Standard RFC 5322 email address"
 };
@@ -421,6 +425,13 @@ function createHighEntropyPattern(config = {}) {
 }
 
 // src/core/vault.ts
+function collectPlaceholderLiterals(text) {
+  const found = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(/\[[^[\]\r\n]{1,256}_\d+\]/g)) {
+    found.add(m[0]);
+  }
+  return found;
+}
 var Vault = class _Vault {
   placeholderToEntry = /* @__PURE__ */ new Map();
   placeholderToEntries = /* @__PURE__ */ new Map();
@@ -478,7 +489,8 @@ var Vault = class _Vault {
     this.evictOldestIfNeeded();
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
-      while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
+      const isTaken = typeof existingText === "string" ? (p) => existingText.includes(p) : (p) => existingText.has(p);
+      while (isTaken(`[${pattern.placeholder}_${count}]`)) {
         count++;
       }
     }
@@ -717,19 +729,22 @@ var RedactEngine = class {
       return a.startIndex - b.startIndex;
     });
     const accepted = [];
+    const covered = rawMatches.length > 1 ? new Uint8Array(text.length) : void 0;
     for (const candidate of rawMatches) {
-      const hasOverlap = accepted.some(
-        (acc) => candidate.startIndex < acc.endIndex && acc.startIndex < candidate.endIndex
-      );
-      if (!hasOverlap) {
-        accepted.push(candidate);
+      if (covered) {
+        if (covered.subarray(candidate.startIndex, candidate.endIndex).includes(1)) {
+          continue;
+        }
+        covered.fill(1, candidate.startIndex, candidate.endIndex);
       }
+      accepted.push(candidate);
     }
     accepted.sort((a, b) => a.startIndex - b.startIndex);
     const matches = [];
     const stats = {};
     let redactedText = "";
     let cursor = 0;
+    let literalPlaceholders;
     for (let i = 0; i < accepted.length; i++) {
       const m = accepted[i];
       let replacement;
@@ -756,7 +771,8 @@ var RedactEngine = class {
           });
         }
       } else if (reversible && vault) {
-        replacement = vault.getOrCreate(m.secret, m.pattern, text);
+        literalPlaceholders ??= collectPlaceholderLiterals(text);
+        replacement = vault.getOrCreate(m.secret, m.pattern, literalPlaceholders);
       } else {
         replacement = `[REDACTED_${m.pattern.placeholder}]`;
       }

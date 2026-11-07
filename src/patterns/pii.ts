@@ -8,7 +8,9 @@ export const emailPattern: RedactPattern = {
   name: 'Email Address',
   category: 'pii',
   severity: 'medium',
-  regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // RFC 5321 length limits (local part 64, domain 253, label 63) keep matching linear;
+  // unbounded quantifiers backtracked quadratically on inputs like "a-a-a-..." (80KB took 10 s).
+  regex: /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b/g,
   placeholder: 'EMAIL_ADDRESS',
   description: 'Standard RFC 5322 email address'
 };

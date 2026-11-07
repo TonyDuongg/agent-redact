@@ -1,7 +1,8 @@
-import { readdirSync, statSync, readFileSync, appendFileSync, existsSync } from 'node:fs';
-import { join, relative, extname } from 'node:path';
+import { statSync, appendFileSync, existsSync } from 'node:fs';
+import { relative } from 'node:path';
 import { redact } from '../core/engine.js';
 import { loadConfig } from '../core/config.js';
+import { walkFiles, readTextForScan, DEFAULT_MAX_SCAN_BYTES } from '../core/files.js';
 import type { RedactMatch } from '../core/types.js';
 
 interface FileLeakRecord {
@@ -9,12 +10,6 @@ interface FileLeakRecord {
   line: number;
   match: RedactMatch;
 }
-
-const BINARY_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.svg',
-  '.wasm', '.zip', '.tar', '.gz', '.7z', '.exe', '.dll',
-  '.so', '.dylib', '.pdf', '.docx', '.xlsx', '.bin', '.dat'
-]);
 
 function getInput(name: string, fallback: string = ''): string {
   const keyWithUnderscore = `INPUT_${name.replace(/-/g, '_').toUpperCase()}`;
@@ -35,37 +30,6 @@ function writeSummary(markdown: string): void {
   if (summaryFile && existsSync(summaryFile)) {
     appendFileSync(summaryFile, markdown + '\n\n', 'utf-8');
   }
-}
-
-function collectFiles(
-  dir: string,
-  excludeDirs: Set<string>,
-  result: string[] = []
-): string[] {
-  try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name.startsWith('.') && entry.name !== '.' && entry.name !== '..') {
-        if (entry.name === '.git') continue;
-      }
-
-      const fullPath = join(dir, entry.name);
-
-      if (entry.isDirectory()) {
-        if (!excludeDirs.has(entry.name)) {
-          collectFiles(fullPath, excludeDirs, result);
-        }
-      } else if (entry.isFile()) {
-        const ext = extname(entry.name).toLowerCase();
-        if (!BINARY_EXTENSIONS.has(ext)) {
-          result.push(fullPath);
-        }
-      }
-    }
-  } catch {
-    // skip unreadable directories
-  }
-  return result;
 }
 
 /** Escaping rules for GitHub workflow command data and properties (see @actions/core) */
@@ -94,6 +58,11 @@ export async function runAction(): Promise<void> {
   const excludeDirs = new Set(
     excludeInput.split(',').map((s) => s.trim()).filter(Boolean)
   );
+  const maxFileSizeMb = Number(getInput('max-file-size', '5'));
+  const maxBytes =
+    Number.isFinite(maxFileSizeMb) && maxFileSizeMb > 0
+      ? Math.floor(maxFileSizeMb * 1024 * 1024)
+      : DEFAULT_MAX_SCAN_BYTES;
 
   console.log(`[agent-redact] Starting security scan on: ${scanPath}`);
   console.log(`[agent-redact] Fail on leak: ${failOnLeak} | Entropy detection: ${detectEntropy}`);
@@ -105,21 +74,28 @@ export async function runAction(): Promise<void> {
   if (stat.isFile()) {
     filesToScan.push(scanPath);
   } else {
-    collectFiles(scanPath, excludeDirs, filesToScan);
+    walkFiles(scanPath, excludeDirs, filesToScan);
   }
 
   console.log(`[agent-redact] Discovered ${filesToScan.length} text files to analyze.`);
 
   const allLeaks: FileLeakRecord[] = [];
+  const skipped: Record<'binary' | 'too-large' | 'unreadable', number> = {
+    binary: 0,
+    'too-large': 0,
+    unreadable: 0
+  };
   const startTime = performance.now();
 
   for (const filePath of filesToScan) {
-    let content: string;
-    try {
-      content = readFileSync(filePath, 'utf-8');
-    } catch {
+    // Content sniffing catches binaries with unlisted extensions (.woff2, .mp4, no extension…),
+    // and the size cap keeps large blobs out of memory
+    const read = readTextForScan(filePath, maxBytes);
+    if (!read.ok) {
+      skipped[read.reason]++;
       continue;
     }
+    const content = read.content;
 
     const result = redact(content, {
       include: loadedConfig?.include,
@@ -150,6 +126,14 @@ export async function runAction(): Promise<void> {
   const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
   const totalLeaks = allLeaks.length;
   const hasLeaks = totalLeaks > 0;
+  const skippedTotal = skipped.binary + skipped['too-large'] + skipped.unreadable;
+  const skippedSummary =
+    `Skipped ${skippedTotal} file(s): ${skipped.binary} binary, ` +
+    `${skipped['too-large']} larger than ${(maxBytes / (1024 * 1024)).toFixed(2)} MB, ` +
+    `${skipped.unreadable} unreadable.`;
+  if (skippedTotal > 0) {
+    console.log(`[agent-redact] ${skippedSummary}`);
+  }
 
   // Set GitHub Action outputs
   setOutput('has-leaks', String(hasLeaks));
@@ -158,7 +142,10 @@ export async function runAction(): Promise<void> {
   // Build GitHub Step Summary Markdown
   let summaryMd = `## 🛡️ agent-redact Security Scan Report\n\n`;
   summaryMd += `* **Status**: ${hasLeaks ? '❌ **Secrets Detected**' : '✅ **No Leaks Found**'}\n`;
-  summaryMd += `* **Files Scanned**: ${filesToScan.length}\n`;
+  summaryMd += `* **Files Scanned**: ${filesToScan.length - skippedTotal}\n`;
+  if (skippedTotal > 0) {
+    summaryMd += `* **Files Skipped**: ${skippedSummary}\n`;
+  }
   summaryMd += `* **Total Leaks Detected**: ${totalLeaks}\n`;
   summaryMd += `* **Scan Duration**: ${durationMs}ms\n\n`;
 

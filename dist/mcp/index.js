@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { constants, existsSync, statSync, openSync, readSync, closeSync, readFileSync, realpathSync, writeFileSync, fchmodSync } from 'fs';
+import { constants, existsSync, statSync, readFileSync, realpathSync, openSync, writeFileSync, fchmodSync, closeSync, readSync } from 'fs';
 import { resolve, sep, join, dirname, basename, relative, isAbsolute } from 'path';
 import { homedir, tmpdir } from 'os';
 
@@ -86,7 +86,9 @@ var privateKeyPattern = {
   name: "Private Key",
   category: "credential",
   severity: "critical",
-  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[\s\S]*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
+  // The body may not run past another BEGIN marker: without that, every unterminated
+  // BEGIN rescanned to the end of the input (quadratic on many BEGINs without END).
+  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:(?!-----BEGIN )[\s\S])*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
   placeholder: "PRIVATE_KEY",
   description: "RSA, OpenSSH, DSA, EC, Encrypted, or PGP private key certificate"
 };
@@ -278,7 +280,9 @@ var emailPattern = {
   name: "Email Address",
   category: "pii",
   severity: "medium",
-  regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // RFC 5321 length limits (local part 64, domain 253, label 63) keep matching linear;
+  // unbounded quantifiers backtracked quadratically on inputs like "a-a-a-..." (80KB took 10 s).
+  regex: /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b/g,
   placeholder: "EMAIL_ADDRESS",
   description: "Standard RFC 5322 email address"
 };
@@ -429,6 +433,13 @@ function createHighEntropyPattern(config = {}) {
 }
 
 // src/core/vault.ts
+function collectPlaceholderLiterals(text) {
+  const found = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(/\[[^[\]\r\n]{1,256}_\d+\]/g)) {
+    found.add(m[0]);
+  }
+  return found;
+}
 var Vault = class _Vault {
   placeholderToEntry = /* @__PURE__ */ new Map();
   placeholderToEntries = /* @__PURE__ */ new Map();
@@ -486,7 +497,8 @@ var Vault = class _Vault {
     this.evictOldestIfNeeded();
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
-      while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
+      const isTaken = typeof existingText === "string" ? (p) => existingText.includes(p) : (p) => existingText.has(p);
+      while (isTaken(`[${pattern.placeholder}_${count}]`)) {
         count++;
       }
     }
@@ -725,19 +737,22 @@ var RedactEngine = class {
       return a.startIndex - b.startIndex;
     });
     const accepted = [];
+    const covered = rawMatches.length > 1 ? new Uint8Array(text.length) : void 0;
     for (const candidate of rawMatches) {
-      const hasOverlap = accepted.some(
-        (acc) => candidate.startIndex < acc.endIndex && acc.startIndex < candidate.endIndex
-      );
-      if (!hasOverlap) {
-        accepted.push(candidate);
+      if (covered) {
+        if (covered.subarray(candidate.startIndex, candidate.endIndex).includes(1)) {
+          continue;
+        }
+        covered.fill(1, candidate.startIndex, candidate.endIndex);
       }
+      accepted.push(candidate);
     }
     accepted.sort((a, b) => a.startIndex - b.startIndex);
     const matches = [];
     const stats = {};
     let redactedText = "";
     let cursor = 0;
+    let literalPlaceholders;
     for (let i = 0; i < accepted.length; i++) {
       const m = accepted[i];
       let replacement;
@@ -764,7 +779,8 @@ var RedactEngine = class {
           });
         }
       } else if (reversible && vault) {
-        replacement = vault.getOrCreate(m.secret, m.pattern, text);
+        literalPlaceholders ??= collectPlaceholderLiterals(text);
+        replacement = vault.getOrCreate(m.secret, m.pattern, literalPlaceholders);
       } else {
         replacement = `[REDACTED_${m.pattern.placeholder}]`;
       }
@@ -834,6 +850,17 @@ function redact(text, options) {
 }
 function unmask(text, vault) {
   return defaultEngine.unmask(text, vault);
+}
+var DEFAULT_MAX_SCAN_BYTES = 5 * 1024 * 1024;
+function isBinaryFile(path, sampleSize = 8192) {
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(sampleSize);
+    const read = readSync(fd, buf, 0, sampleSize, 0);
+    return buf.subarray(0, read).includes(0);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // src/mcp/server.ts
@@ -1045,9 +1072,8 @@ function createMcpServer(options = {}) {
           ]
         };
       }
-      const MAX_SCAN_BYTES = 5 * 1024 * 1024;
       const fileStat = statSync(resolvedFile);
-      if (fileStat.size > MAX_SCAN_BYTES) {
+      if (fileStat.size > DEFAULT_MAX_SCAN_BYTES) {
         return {
           isError: true,
           content: [
@@ -1059,15 +1085,7 @@ function createMcpServer(options = {}) {
         };
       }
       if (fileStat.size > 0) {
-        const checkBytes = Math.min(8192, fileStat.size);
-        const buf = Buffer.alloc(checkBytes);
-        const fd = openSync(resolvedFile, "r");
-        try {
-          readSync(fd, buf, 0, checkBytes, 0);
-        } finally {
-          closeSync(fd);
-        }
-        if (buf.includes(0)) {
+        if (isBinaryFile(resolvedFile)) {
           return {
             isError: true,
             content: [
