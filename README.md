@@ -73,6 +73,16 @@ npx agent-redact input.log -r -o input.safe --vault-out session.vault.json
 npx agent-redact input.safe --unmask session.vault.json -o input.restored
 ```
 
+The vault holds the original secrets, so **encrypt it**. The passphrase is read from an environment variable, never from argv, so it stays out of shell history and process listings:
+
+```bash
+export VAULT_PASS='a long passphrase'                       # or set AGENT_REDACT_VAULT_KEY
+npx agent-redact .env -r -o .env.safe --vault-out session.vault --vault-key-env VAULT_PASS
+npx agent-redact .env.safe --unmask session.vault --vault-key-env VAULT_PASS -o .env.restored
+```
+
+Encrypted vaults use AES-256-GCM with a scrypt-derived key (N=2¹⁵). The format and KDF parameters are authenticated, so a tampered or downgraded file fails to decrypt. Writing a vault without a key prints a warning. From code: `encryptVaultJson(vault.toJSON(), pass)`, `Vault.fromJSON(decryptVaultJson(file, pass))`.
+
 ---
 
 ### 2. Node.js / TypeScript SDK
@@ -624,9 +634,32 @@ Without the pre-commit framework, a plain git hook works too: `npx agent-redact 
 | **GCP OAuth Client Secret** | `GOCSPX-...` | `CRITICAL` | `[GCP_OAUTH_CLIENT_SECRET]` |
 | **DigitalOcean Token** | `dop_v1_[a-f0-9]{64}` | `CRITICAL` | `[DIGITALOCEAN_TOKEN]` |
 | **Mailgun API Key** | `key-[0-9a-zA-Z]{32}` | `HIGH` | `[MAILGUN_API_KEY]` |
+| **OpenRouter API Key** | `sk-or-v1-<hex>` | `CRITICAL` | `[OPENROUTER_API_KEY]` |
+| **Groq API Key** | `gsk_...` | `CRITICAL` | `[GROQ_API_KEY]` |
+| **xAI API Key** | `xai-...` | `CRITICAL` | `[XAI_API_KEY]` |
+| **Perplexity API Key** | `pplx-...` | `CRITICAL` | `[PERPLEXITY_API_KEY]` |
+| **Replicate API Token** | `r8_...` | `CRITICAL` | `[REPLICATE_API_TOKEN]` |
+| **Hugging Face Org Token** | `api_org_...` | `HIGH` | `[HUGGINGFACE_ORG_TOKEN]` |
+| **LangSmith API Key** | `lsv2_pt_...` / `lsv2_sk_...` | `HIGH` | `[LANGSMITH_API_KEY]` |
 | **PII: Emails & IPv4/IPv6** | RFC 5321 emails, IPv4 & IPv6 network addrs | `MEDIUM` / `LOW` | `[EMAIL_ADDRESS]`, `[IPV4_ADDRESS]`, `[IPV6_ADDRESS]` |
 | **PII: Phone Numbers** | US, international E.164, Vietnamese mobile & landline | `MEDIUM` | `[PHONE_NUMBER]` |
 | **PII: SSN & Cards** | US SSN, Major Credit Cards | `CRITICAL` | `[US_SSN]`, `[CREDIT_CARD]` |
+
+#### Opt-in presets
+
+| Preset | Patterns | Enable with |
+| :--- | :--- | :--- |
+| `vn-pii` | Vietnamese citizen ID (CCCD, 12 digits, province code 001–096), CMND/CCCD numbers after an ID keyword, tax code (MST) after `MST`/`mã số thuế`, bank account after `STK`/`số tài khoản` | `"presets": ["vn-pii"]` in `.agentredactrc`, or `redact(text, { presets: ['vn-pii'] })` |
+
+Presets are off by default because bare numbers are ambiguous (order or invoice IDs). Only the 12-digit CCCD matches without context, and only with a valid province code.
+
+#### Detection quality
+
+`tests/detection.test.ts` holds a labelled corpus:
+- **Positive samples for every built-in pattern.** The test fails if a new pattern is added without one. Samples are assembled at runtime, so no real-looking token is committed.
+- **A negative corpus** (`tests/fixtures/negatives.txt`) of realistic non-secret text: lockfile integrity hashes, git/docker digests, UUIDs, logs, versions, CSS, code, URLs, Ethereum addresses.
+
+Current result: every positive is detected with its exact span, and there are **0 false positives** on the negative corpus. When you fix a false positive, add the snippet there.
 
 ---
 

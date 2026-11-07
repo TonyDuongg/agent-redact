@@ -1,4 +1,4 @@
-import { DEFAULT_PATTERNS } from '../patterns/index.js';
+import { DEFAULT_PATTERNS, resolvePresets } from '../patterns/index.js';
 import {
   createHighEntropyPattern,
   isHighEntropyToken,
@@ -79,9 +79,8 @@ export class RedactEngine {
     const vault = options?.vault ?? this.vault ?? (reversible ? new Vault() : undefined);
 
     // Filter patterns according to options
-    let activePatterns = options?.customPatterns
-      ? [...this.patterns, ...options.customPatterns]
-      : [...this.patterns];
+    const presetPatterns = resolvePresets(options?.presets);
+    let activePatterns = [...this.patterns, ...presetPatterns, ...(options?.customPatterns ?? [])];
 
     if (options?.detectHighEntropy) {
       activePatterns.push(createHighEntropyPattern(options.entropy as EntropyConfig | undefined));
@@ -89,7 +88,8 @@ export class RedactEngine {
 
     if (options?.include && options.include.length > 0) {
       const includeSet = new Set(options.include);
-      const customIds = new Set((options.customPatterns ?? []).map((p) => p.id));
+      // Explicitly requested additions (custom patterns, presets) survive an include filter
+      const customIds = new Set([...(options.customPatterns ?? []), ...presetPatterns].map((p) => p.id));
       activePatterns = activePatterns.filter(
         (p) =>
           includeSet.has(p.id) ||

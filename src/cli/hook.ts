@@ -84,7 +84,8 @@ function redactOptionsFor(cwd: string, configPath?: string): RedactOptions {
       allowlist: c?.allowlist,
       customPatterns: c?.customPatterns,
       detectHighEntropy: c?.detectHighEntropy ?? false,
-      entropy: c?.entropy
+      entropy: c?.entropy,
+      presets: c?.presets
     };
   }
   let c = null;
@@ -96,6 +97,7 @@ function redactOptionsFor(cwd: string, configPath?: string): RedactOptions {
   // Only settings that can ADD detections; never ones that remove them
   return {
     customPatterns: c?.customPatterns,
+    presets: c?.presets, // presets only add patterns
     detectHighEntropy: c?.detectHighEntropy === true,
     entropy: c?.detectHighEntropy === true ? c.entropy : undefined
   };

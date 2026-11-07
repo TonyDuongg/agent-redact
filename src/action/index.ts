@@ -98,6 +98,7 @@ export async function runAction(): Promise<void> {
       allowlist: loadedConfig?.allowlist,
       customPatterns: loadedConfig?.customPatterns,
       detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+      presets: loadedConfig?.presets,
       entropy: loadedConfig?.entropy,
       respectInlineIgnore: true,
       baseline

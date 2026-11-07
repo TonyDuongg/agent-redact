@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { writeFileSync, readFileSync, constants, existsSync, statSync, chmodSync, openSync, readSync, closeSync, readdirSync, realpathSync, fchmodSync } from 'fs';
+import { writeFileSync, readFileSync, constants, existsSync, statSync, openSync, readSync, closeSync, chmodSync, readdirSync, realpathSync, fchmodSync } from 'fs';
 import { relative, resolve, join, extname, isAbsolute, sep, dirname, basename } from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { homedir, tmpdir } from 'os';
+import { createDecipheriv, randomBytes, createCipheriv, scryptSync, createHash } from 'crypto';
 import { execFileSync } from 'child_process';
-import { createHash } from 'crypto';
 
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -19,7 +19,7 @@ var __export = (target, all) => {
 };
 
 // src/patterns/credentials.ts
-var anthropicApiKeyPattern, openaiApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, githubTokenPattern, stripeKeyPattern, jwtTokenPattern, privateKeyPattern, googleApiKeyPattern, slackTokenPattern, databaseUrlPattern, basicAuthUrlPattern, huggingFaceTokenPattern, gitlabTokenPattern, discordTokenPattern, npmTokenPattern, sendgridApiKeyPattern, twilioAccountSidPattern, supabaseKeyPattern, telegramBotTokenPattern, twilioApiKeyPattern, azureStorageKeyPattern, gcpOauthSecretPattern, digitalOceanTokenPattern, mailgunApiKeyPattern, CREDENTIAL_PATTERNS;
+var anthropicApiKeyPattern, openaiApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, githubTokenPattern, stripeKeyPattern, jwtTokenPattern, privateKeyPattern, googleApiKeyPattern, slackTokenPattern, databaseUrlPattern, basicAuthUrlPattern, huggingFaceTokenPattern, gitlabTokenPattern, discordTokenPattern, npmTokenPattern, sendgridApiKeyPattern, twilioAccountSidPattern, supabaseKeyPattern, telegramBotTokenPattern, twilioApiKeyPattern, azureStorageKeyPattern, gcpOauthSecretPattern, digitalOceanTokenPattern, mailgunApiKeyPattern, openrouterApiKeyPattern, groqApiKeyPattern, xaiApiKeyPattern, perplexityApiKeyPattern, replicateApiTokenPattern, huggingFaceOrgTokenPattern, langsmithApiKeyPattern, CREDENTIAL_PATTERNS;
 var init_credentials = __esm({
   "src/patterns/credentials.ts"() {
     anthropicApiKeyPattern = {
@@ -253,6 +253,69 @@ var init_credentials = __esm({
       placeholder: "MAILGUN_API_KEY",
       description: "Mailgun API authentication key"
     };
+    openrouterApiKeyPattern = {
+      id: "openrouter-api-key",
+      name: "OpenRouter API Key",
+      category: "credential",
+      severity: "critical",
+      regex: /\bsk-or-v1-[a-f0-9]{40,}(?![A-Za-z0-9_])/g,
+      placeholder: "OPENROUTER_API_KEY",
+      description: "OpenRouter API key (sk-or-v1-...)"
+    };
+    groqApiKeyPattern = {
+      id: "groq-api-key",
+      name: "Groq API Key",
+      category: "credential",
+      severity: "critical",
+      regex: /\bgsk_[A-Za-z0-9]{40,}(?![A-Za-z0-9_])/g,
+      placeholder: "GROQ_API_KEY",
+      description: "Groq API key (gsk_...)"
+    };
+    xaiApiKeyPattern = {
+      id: "xai-api-key",
+      name: "xAI API Key",
+      category: "credential",
+      severity: "critical",
+      regex: /\bxai-[A-Za-z0-9]{60,}(?![A-Za-z0-9_])/g,
+      placeholder: "XAI_API_KEY",
+      description: "xAI (Grok) API key (xai-...)"
+    };
+    perplexityApiKeyPattern = {
+      id: "perplexity-api-key",
+      name: "Perplexity API Key",
+      category: "credential",
+      severity: "critical",
+      regex: /\bpplx-[A-Za-z0-9]{32,}(?![A-Za-z0-9_])/g,
+      placeholder: "PERPLEXITY_API_KEY",
+      description: "Perplexity API key (pplx-...)"
+    };
+    replicateApiTokenPattern = {
+      id: "replicate-api-token",
+      name: "Replicate API Token",
+      category: "credential",
+      severity: "critical",
+      regex: /\br8_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+      placeholder: "REPLICATE_API_TOKEN",
+      description: "Replicate API token (r8_...)"
+    };
+    huggingFaceOrgTokenPattern = {
+      id: "huggingface-org-token",
+      name: "Hugging Face Organization Token",
+      category: "credential",
+      severity: "high",
+      regex: /\bapi_org_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+      placeholder: "HUGGINGFACE_ORG_TOKEN",
+      description: "Hugging Face organization API token (api_org_...)"
+    };
+    langsmithApiKeyPattern = {
+      id: "langsmith-api-key",
+      name: "LangSmith API Key",
+      category: "credential",
+      severity: "high",
+      regex: /\blsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}(?![A-Za-z0-9_])/g,
+      placeholder: "LANGSMITH_API_KEY",
+      description: "LangSmith / LangChain personal or service key (lsv2_pt_ / lsv2_sk_)"
+    };
     CREDENTIAL_PATTERNS = [
       anthropicApiKeyPattern,
       openaiApiKeyPattern,
@@ -278,7 +341,14 @@ var init_credentials = __esm({
       azureStorageKeyPattern,
       gcpOauthSecretPattern,
       digitalOceanTokenPattern,
-      mailgunApiKeyPattern
+      mailgunApiKeyPattern,
+      openrouterApiKeyPattern,
+      groqApiKeyPattern,
+      xaiApiKeyPattern,
+      perplexityApiKeyPattern,
+      replicateApiTokenPattern,
+      huggingFaceOrgTokenPattern,
+      langsmithApiKeyPattern
     ];
   }
 });
@@ -383,6 +453,86 @@ var init_pii = __esm({
   }
 });
 
+// src/patterns/vn.ts
+function hasValidProvinceCode(id) {
+  const province = Number(id.slice(0, 3));
+  return province >= 1 && province <= 96;
+}
+var vnCitizenIdPattern, vnIdNumberPattern, vnTaxCodePattern, vnBankAccountPattern, VN_PII_PATTERNS;
+var init_vn = __esm({
+  "src/patterns/vn.ts"() {
+    vnCitizenIdPattern = {
+      id: "vn-citizen-id",
+      name: "Vietnamese Citizen ID (CCCD)",
+      category: "pii",
+      severity: "high",
+      regex: /(?<![\w$])0\d{11}(?!\d)/g,
+      placeholder: "VN_CITIZEN_ID",
+      description: "12-digit Vietnamese citizen identity card number (CCCD) with a valid province code",
+      validator: hasValidProvinceCode
+    };
+    vnIdNumberPattern = {
+      id: "vn-id-number",
+      name: "Vietnamese ID Number (CMND/CCCD, with context)",
+      category: "pii",
+      severity: "high",
+      regex: /(?:CMND|CCCD|CMT|căn cước|can cuoc|chứng minh|chung minh)(?:\s+(?:số|so|no\.?))?[\s:#.=-]*(\d{9}|\d{12})(?!\d)/giu,
+      secretGroup: 1,
+      placeholder: "VN_ID_NUMBER",
+      description: "9-digit CMND or 12-digit CCCD number preceded by an ID keyword"
+    };
+    vnTaxCodePattern = {
+      id: "vn-tax-code",
+      name: "Vietnamese Tax Code (MST)",
+      category: "pii",
+      severity: "medium",
+      regex: /(?:MST|mã số thuế|ma so thue|tax\s*code)[\s:#.=-]*(\d{10}(?:-\d{3})?)(?!\d)/giu,
+      secretGroup: 1,
+      placeholder: "VN_TAX_CODE",
+      description: "10- or 13-digit Vietnamese tax code preceded by MST / m\xE3 s\u1ED1 thu\u1EBF"
+    };
+    vnBankAccountPattern = {
+      id: "vn-bank-account",
+      name: "Vietnamese Bank Account Number",
+      category: "pii",
+      severity: "high",
+      regex: /(?:STK|số tài khoản|so tai khoan|tài khoản số|tai khoan so|account\s*(?:no\.?|number))[\s:#.=-]*(\d{6,20})(?!\d)/giu,
+      secretGroup: 1,
+      placeholder: "VN_BANK_ACCOUNT",
+      description: "Bank account number preceded by STK / s\u1ED1 t\xE0i kho\u1EA3n / account number"
+    };
+    VN_PII_PATTERNS = [
+      vnCitizenIdPattern,
+      vnIdNumberPattern,
+      vnTaxCodePattern,
+      vnBankAccountPattern
+    ];
+  }
+});
+
+// src/patterns/presets.ts
+function resolvePresets(names) {
+  if (!names || names.length === 0) return [];
+  const out = [];
+  for (const name of names) {
+    const preset = PATTERN_PRESETS[name];
+    if (!preset) {
+      throw new Error(`Unknown preset "${name}". Available presets: ${Object.keys(PATTERN_PRESETS).join(", ")}`);
+    }
+    out.push(...preset);
+  }
+  return out;
+}
+var PATTERN_PRESETS;
+var init_presets = __esm({
+  "src/patterns/presets.ts"() {
+    init_vn();
+    PATTERN_PRESETS = {
+      "vn-pii": VN_PII_PATTERNS
+    };
+  }
+});
+
 // src/patterns/index.ts
 var DEFAULT_PATTERNS;
 var init_patterns = __esm({
@@ -391,6 +541,8 @@ var init_patterns = __esm({
     init_pii();
     init_credentials();
     init_pii();
+    init_vn();
+    init_presets();
     DEFAULT_PATTERNS = [
       ...CREDENTIAL_PATTERNS,
       ...PII_PATTERNS
@@ -743,13 +895,14 @@ var init_engine = __esm({
         const startTime = performance.now();
         const reversible = options?.reversible ?? false;
         const vault = options?.vault ?? this.vault ?? (reversible ? new Vault() : void 0);
-        let activePatterns = options?.customPatterns ? [...this.patterns, ...options.customPatterns] : [...this.patterns];
+        const presetPatterns = resolvePresets(options?.presets);
+        let activePatterns = [...this.patterns, ...presetPatterns, ...options?.customPatterns ?? []];
         if (options?.detectHighEntropy) {
           activePatterns.push(createHighEntropyPattern(options.entropy));
         }
         if (options?.include && options.include.length > 0) {
           const includeSet = new Set(options.include);
-          const customIds = new Set((options.customPatterns ?? []).map((p) => p.id));
+          const customIds = new Set([...options.customPatterns ?? [], ...presetPatterns].map((p) => p.id));
           activePatterns = activePatterns.filter(
             (p) => includeSet.has(p.id) || customIds.has(p.id) || options.detectHighEntropy && p.id === "generic-high-entropy-secret"
           );
@@ -1028,10 +1181,10 @@ var init_files = __esm({
 });
 
 // src/version.ts
-var VERSION;
+var VERSION2;
 var init_version = __esm({
   "src/version.ts"() {
-    VERSION = "0.1.5";
+    VERSION2 = "0.1.5";
   }
 });
 
@@ -1128,7 +1281,7 @@ function createMcpServer(options = {}) {
   const allowedRoots = (options.allowedRoots ?? defaultAllowedRoots()).map(realpathOrNearest);
   const server = new McpServer({
     name: "agent-redact",
-    version: VERSION
+    version: VERSION2
   });
   server.tool(
     "redact_text",
@@ -1410,6 +1563,9 @@ var init_server = __esm({
 // src/cli/index.ts
 init_engine();
 init_vault();
+
+// src/core/config.ts
+init_presets();
 var DEFAULT_CONFIG_FILENAMES = [
   "agent-redact.config.json",
   ".agentredactrc.json",
@@ -1469,6 +1625,12 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
     const raw = readFileSync(targetPath, "utf-8");
     const parsed = JSON.parse(raw);
     const resolvedCustomPatterns = parsed.customPatterns?.map(resolveCustomPattern);
+    if (parsed.presets !== void 0) {
+      if (!Array.isArray(parsed.presets) || parsed.presets.some((p) => typeof p !== "string")) {
+        throw new Error('"presets" must be an array of preset names');
+      }
+      resolvePresets(parsed.presets);
+    }
     return {
       ...parsed,
       customPatterns: resolvedCustomPatterns
@@ -1481,6 +1643,70 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
 
 // src/cli/index.ts
 init_files();
+var FORMAT = "agent-redact-vault";
+var VERSION = 1;
+var KDF = { name: "scrypt", N: 32768, r: 8, p: 1 };
+function headerAad(file) {
+  return Buffer.from(JSON.stringify([file.format, file.version, file.kdf, file.cipher]), "utf8");
+}
+function deriveKey(passphrase, salt, kdf) {
+  return scryptSync(passphrase.normalize("NFC"), salt, 32, {
+    N: kdf.N,
+    r: kdf.r,
+    p: kdf.p,
+    maxmem: 256 * kdf.N * kdf.r
+  });
+}
+function isEncryptedVault(content) {
+  try {
+    const parsed = JSON.parse(content);
+    return parsed?.format === FORMAT;
+  } catch {
+    return false;
+  }
+}
+function encryptVaultJson(json, passphrase) {
+  if (typeof passphrase !== "string" || passphrase.length === 0) {
+    throw new Error("A non-empty passphrase is required to encrypt a vault");
+  }
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const kdf = { ...KDF, salt: salt.toString("base64") };
+  const header = { format: FORMAT, version: VERSION, kdf, cipher: "aes-256-gcm" };
+  const cipher = createCipheriv("aes-256-gcm", deriveKey(passphrase, salt, kdf), iv);
+  cipher.setAAD(headerAad(header));
+  const data = Buffer.concat([cipher.update(json, "utf8"), cipher.final()]);
+  const file = {
+    ...header,
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    data: data.toString("base64")
+  };
+  return JSON.stringify(file, null, 2) + "\n";
+}
+function decryptVaultJson(content, passphrase) {
+  const fail = () => new Error("Cannot decrypt vault: wrong passphrase or corrupted file");
+  let file;
+  try {
+    file = JSON.parse(content);
+  } catch {
+    throw fail();
+  }
+  if (file?.format !== FORMAT || file.version !== VERSION || file.cipher !== "aes-256-gcm" || file.kdf?.name !== "scrypt") {
+    throw fail();
+  }
+  try {
+    const key = deriveKey(passphrase, Buffer.from(file.kdf.salt, "base64"), file.kdf);
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(file.iv, "base64"));
+    decipher.setAAD(headerAad(file));
+    decipher.setAuthTag(Buffer.from(file.tag, "base64"));
+    return Buffer.concat([decipher.update(Buffer.from(file.data, "base64")), decipher.final()]).toString("utf8");
+  } catch {
+    throw fail();
+  }
+}
+
+// src/cli/index.ts
 init_version();
 
 // src/cli/scan.ts
@@ -1744,7 +1970,7 @@ function writeScanBaseline(path, outcome) {
   writeBaseline(path, outcome.findings);
 }
 function formatReport(outcome, format) {
-  if (format === "sarif") return JSON.stringify(toSarif(outcome.findings, VERSION), null, 2) + "\n";
+  if (format === "sarif") return JSON.stringify(toSarif(outcome.findings, VERSION2), null, 2) + "\n";
   return JSON.stringify(outcome, null, 2) + "\n";
 }
 function formatText(outcome, c) {
@@ -1801,7 +2027,8 @@ function redactOptionsFor(cwd, configPath) {
       allowlist: c2?.allowlist,
       customPatterns: c2?.customPatterns,
       detectHighEntropy: c2?.detectHighEntropy ?? false,
-      entropy: c2?.entropy
+      entropy: c2?.entropy,
+      presets: c2?.presets
     };
   }
   let c = null;
@@ -1811,6 +2038,8 @@ function redactOptionsFor(cwd, configPath) {
   }
   return {
     customPatterns: c?.customPatterns,
+    presets: c?.presets,
+    // presets only add patterns
     detectHighEntropy: c?.detectHighEntropy === true,
     entropy: c?.detectHighEntropy === true ? c.entropy : void 0
   };
@@ -2022,6 +2251,29 @@ function writeSecureFile(filePath, content) {
   } catch {
   }
 }
+function resolveVaultKey(vaultKeyEnv) {
+  if (vaultKeyEnv) {
+    const value = process.env[vaultKeyEnv];
+    if (!value) {
+      console.error(`${colors.red}Error:${colors.reset} environment variable ${vaultKeyEnv} (from --vault-key-env) is not set or empty.`);
+      process.exit(2);
+    }
+    return value;
+  }
+  return process.env["AGENT_REDACT_VAULT_KEY"] || void 0;
+}
+function saveVault(path, vault, vaultKeyEnv) {
+  const key = resolveVaultKey(vaultKeyEnv);
+  writeSecureFile(path, key ? encryptVaultJson(vault.toJSON(), key) : vault.toJSON());
+  if (key) {
+    console.error(`${colors.green}\u2714${colors.reset} Encrypted session vault saved to ${path}`);
+  } else {
+    console.error(`${colors.green}\u2714${colors.reset} Session vault saved to ${path}`);
+    console.error(
+      `${colors.yellow}\u26A0${colors.reset} The vault is stored unencrypted and contains the original secrets. Use --vault-key-env <VAR> (or AGENT_REDACT_VAULT_KEY) to encrypt it.`
+    );
+  }
+}
 var colors = {
   reset: "\x1B[0m",
   bold: "\x1B[1m",
@@ -2036,7 +2288,7 @@ var colors = {
 };
 function printHelp() {
   const helpText = `
-${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v${VERSION}${colors.reset}
+${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v${VERSION2}${colors.reset}
 ${colors.dim}Secret & PII redactor for AI agents, LLM pipelines and CI${colors.reset}
 
 ${colors.bold}USAGE:${colors.reset}
@@ -2063,6 +2315,7 @@ ${colors.bold}OPTIONS:${colors.reset}
   --entropy                   Enable Shannon entropy detection for generic secrets
   --check, --fail-on-leak     Exit with code 1 if any secrets are detected (CI/pre-commit)
   --vault-out <file>          Save generated session vault mappings to JSON file
+  --vault-key-env <VAR>       Encrypt/decrypt the vault with the passphrase in env var VAR
   --unmask <vaultFile>        Restore previously masked file using saved vault file
   --stats                     Display leak statistics breakdown table
   -h, --help                  Show this help message
@@ -2107,7 +2360,7 @@ async function main() {
     process.exit(0);
   }
   if (args.includes("-v") || args.includes("--version")) {
-    console.log(`agent-redact v${VERSION}`);
+    console.log(`agent-redact v${VERSION2}`);
     process.exit(0);
   }
   const VALUE_FLAGS = /* @__PURE__ */ new Set([
@@ -2119,7 +2372,8 @@ async function main() {
     "--format",
     "--report",
     "--baseline",
-    "--write-baseline"
+    "--write-baseline",
+    "--vault-key-env"
   ]);
   const BOOLEAN_FLAGS = /* @__PURE__ */ new Set([
     "-r",
@@ -2176,13 +2430,15 @@ async function main() {
   const reportArg = valueAfter("--report");
   const baselineArg = valueAfter("--baseline");
   const writeBaselineArg = valueAfter("--write-baseline");
+  const vaultKeyArg = valueAfter("--vault-key-env");
+  const vaultKeyEnv = vaultKeyArg.value;
   const isStaged = args.includes("--staged");
   const skipIndices = /* @__PURE__ */ new Set();
   if (outputIdx !== -1) skipIndices.add(outputIdx + 1);
   if (vaultOutIdx !== -1) skipIndices.add(vaultOutIdx + 1);
   if (unmaskIdx !== -1) skipIndices.add(unmaskIdx + 1);
   if (configIdx !== -1) skipIndices.add(configIdx + 1);
-  for (const a of [formatArg, reportArg, baselineArg, writeBaselineArg]) {
+  for (const a of [formatArg, reportArg, baselineArg, writeBaselineArg, vaultKeyArg]) {
     if (a.index !== -1) skipIndices.add(a.index + 1);
   }
   const format = formatArg.value;
@@ -2249,6 +2505,7 @@ async function main() {
           allowlist: loadedConfig?.allowlist,
           customPatterns: loadedConfig?.customPatterns,
           detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+          presets: loadedConfig?.presets,
           entropy: loadedConfig?.entropy
         }
       });
@@ -2302,12 +2559,12 @@ async function main() {
         allowlist: loadedConfig?.allowlist,
         customPatterns: loadedConfig?.customPatterns,
         detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+        presets: loadedConfig?.presets,
         entropy: loadedConfig?.entropy
       })
     }));
     if (vaultOutFile && vault) {
-      writeSecureFile(vaultOutFile, vault.toJSON());
-      console.error(`${colors.green}\u2714${colors.reset} Session vault saved to ${vaultOutFile}`);
+      saveVault(vaultOutFile, vault, vaultKeyEnv);
     }
     for (const { file, res } of results) {
       const shown = relative(process.cwd(), file) || file;
@@ -2346,9 +2603,31 @@ ${colors.green}[agent-redact] All ${results.length} files sanitized.${colors.res
     process.exit(0);
   }
   if (unmaskVaultFile) {
+    let rawVault;
     try {
-      const rawVault = readFileSync(unmaskVaultFile, "utf-8");
-      const vault2 = Vault.fromJSON(rawVault);
+      rawVault = readFileSync(unmaskVaultFile, "utf-8");
+    } catch {
+      console.error(`${colors.red}Error:${colors.reset} Cannot read vault file: ${unmaskVaultFile}`);
+      process.exit(1);
+    }
+    let vaultJson = rawVault;
+    if (isEncryptedVault(rawVault)) {
+      const key = resolveVaultKey(vaultKeyEnv);
+      if (!key) {
+        console.error(
+          `${colors.red}Error:${colors.reset} ${unmaskVaultFile} is encrypted; pass --vault-key-env <VAR> (or set AGENT_REDACT_VAULT_KEY) with the passphrase.`
+        );
+        process.exit(2);
+      }
+      try {
+        vaultJson = decryptVaultJson(rawVault, key);
+      } catch (err) {
+        console.error(`${colors.red}Error:${colors.reset} ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    }
+    try {
+      const vault2 = Vault.fromJSON(vaultJson);
       const restoredText = unmask(content, vault2);
       if (outputFile) {
         writeFileSync(outputFile, restoredText, "utf-8");
@@ -2374,11 +2653,11 @@ ${colors.green}[agent-redact] All ${results.length} files sanitized.${colors.res
     allowlist: loadedConfig?.allowlist,
     customPatterns: loadedConfig?.customPatterns,
     detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+    presets: loadedConfig?.presets,
     entropy: loadedConfig?.entropy
   });
   if (vaultOutFile && vault) {
-    writeSecureFile(vaultOutFile, vault.toJSON());
-    console.error(`${colors.green}\u2714${colors.reset} Session vault saved to ${vaultOutFile}`);
+    saveVault(vaultOutFile, vault, vaultKeyEnv);
   }
   if (isJson) {
     console.log(JSON.stringify(result, null, 2));

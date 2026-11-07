@@ -107,6 +107,12 @@ export interface RedactOptions {
    * @default false
    */
   includeMatchedText?: boolean;
+
+  /**
+   * Opt-in pattern bundles to add, e.g. `['vn-pii']` for Vietnamese ID, tax code and bank
+   * account numbers. Unknown names throw.
+   */
+  presets?: string[];
 }
 
 export interface RedactResult {

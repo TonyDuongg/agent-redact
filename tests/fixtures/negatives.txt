@@ -1,0 +1,50 @@
+# Negative corpus: realistic text that contains NO secrets or PII.
+# Every built-in pattern must report zero findings on this file (tests/detection.test.ts).
+# Add a snippet here whenever a false positive is fixed.
+
+## package-lock.json excerpt
+"node_modules/zod": {
+  "version": "4.1.12",
+  "resolved": "https://registry.npmjs.org/zod/-/zod-4.1.12.tgz",
+  "integrity": "sha512-JInaHOamG8pt5+Ey8kGmdcAcg3OL9reK8ltczgHTAwNhMys/6ThXHityHxVV2p3fkw/c+MAvBHFVYHFZDmjMCQ==",
+  "license": "MIT"
+},
+
+## git / docker / hashes
+commit 9283380c4f1e2b7a6d5e8f9a0b1c2d3e4f5a6b7c
+Merge: 686dba5 afa8503
+sha256:3e1b9a7d0c4f2e8b6a5d9c7e1f3b2a4d6c8e0f2a4b6d8c0e2f4a6b8d0c2e4f6a
+image: ghcr.io/example/app@sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+md5 d41d8cd98f00b204e9800998ecf8427e  empty.txt
+uuid 123e4567-e89b-12d3-a456-426614174000
+request-id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+
+## application logs
+2026-11-05T07:06:15.108Z INFO  server listening on port 3000 (pid 48211)
+2026-11-05 10:45:30,512 WARN  [worker-3] retry 2/5 after 1500ms for job 118273
+[12:30:01] GET /api/v1/users?page=2&limit=50 200 12.4ms
+epoch=1730800000 duration_ms=13 bytes=1048576 ratio=0.75
+
+## versions and numbers
+version 1.0.0.1 ; Version: 2.4.0.10 ; v1.2.3.4 ; node v24.18.0 ; python 3.12.4
+build 20261021.618 ; semver ^8.3.6 ~5.7.3 >=20.0.0
+price 1,234,567.89 VND ; ratio 3.14159 ; temp -12.5C ; 2024-01-15 ; 15/01/2024
+
+## code
+const o = { a: 1, b: 2 }; const x = cond ? a : b;
+evens = arr[::2]; odds = arr[1::2]; rev = s[::-1]
+db::add(x); std::vector<int> v; ab::cd(); Fade::Add
+color: #ff00aa; margin: 0 auto; transform: translate(-50%, -50%);
+fetch(`/api/items/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+SELECT id, name FROM users WHERE created_at > NOW() - INTERVAL '7 days';
+<a href="https://example.com/docs/getting-started#install">Install</a>
+http://localhost:5173/@vite/client  https://registry.npmjs.org:443/@types/node
+mac aa:bb:cc:dd:ee:ff ; time 10:45:30 ; ratio 16:9
+
+## identifiers that look random but are not credentials
+ethereum 0x52908400098527886E0F7030069857D2E4169EE7
+isbn 978-3-16-148410-0
+base64 of "hello world": aGVsbG8gd29ybGQ=
+jwt-like but not a JWT: header.payload.signature
+placeholder values: YOUR_API_KEY_HERE, <token>, ${OPENAI_API_KEY}, process.env.STRIPE_SECRET
+redacted examples: [REDACTED_AWS_ACCESS_KEY_ID] [AWS_ACCESS_KEY_ID_1] sk-ant-... ghp_xxx

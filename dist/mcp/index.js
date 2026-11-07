@@ -246,6 +246,69 @@ var mailgunApiKeyPattern = {
   placeholder: "MAILGUN_API_KEY",
   description: "Mailgun API authentication key"
 };
+var openrouterApiKeyPattern = {
+  id: "openrouter-api-key",
+  name: "OpenRouter API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bsk-or-v1-[a-f0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: "OPENROUTER_API_KEY",
+  description: "OpenRouter API key (sk-or-v1-...)"
+};
+var groqApiKeyPattern = {
+  id: "groq-api-key",
+  name: "Groq API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bgsk_[A-Za-z0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: "GROQ_API_KEY",
+  description: "Groq API key (gsk_...)"
+};
+var xaiApiKeyPattern = {
+  id: "xai-api-key",
+  name: "xAI API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bxai-[A-Za-z0-9]{60,}(?![A-Za-z0-9_])/g,
+  placeholder: "XAI_API_KEY",
+  description: "xAI (Grok) API key (xai-...)"
+};
+var perplexityApiKeyPattern = {
+  id: "perplexity-api-key",
+  name: "Perplexity API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bpplx-[A-Za-z0-9]{32,}(?![A-Za-z0-9_])/g,
+  placeholder: "PERPLEXITY_API_KEY",
+  description: "Perplexity API key (pplx-...)"
+};
+var replicateApiTokenPattern = {
+  id: "replicate-api-token",
+  name: "Replicate API Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\br8_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: "REPLICATE_API_TOKEN",
+  description: "Replicate API token (r8_...)"
+};
+var huggingFaceOrgTokenPattern = {
+  id: "huggingface-org-token",
+  name: "Hugging Face Organization Token",
+  category: "credential",
+  severity: "high",
+  regex: /\bapi_org_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: "HUGGINGFACE_ORG_TOKEN",
+  description: "Hugging Face organization API token (api_org_...)"
+};
+var langsmithApiKeyPattern = {
+  id: "langsmith-api-key",
+  name: "LangSmith API Key",
+  category: "credential",
+  severity: "high",
+  regex: /\blsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}(?![A-Za-z0-9_])/g,
+  placeholder: "LANGSMITH_API_KEY",
+  description: "LangSmith / LangChain personal or service key (lsv2_pt_ / lsv2_sk_)"
+};
 var CREDENTIAL_PATTERNS = [
   anthropicApiKeyPattern,
   openaiApiKeyPattern,
@@ -271,7 +334,14 @@ var CREDENTIAL_PATTERNS = [
   azureStorageKeyPattern,
   gcpOauthSecretPattern,
   digitalOceanTokenPattern,
-  mailgunApiKeyPattern
+  mailgunApiKeyPattern,
+  openrouterApiKeyPattern,
+  groqApiKeyPattern,
+  xaiApiKeyPattern,
+  perplexityApiKeyPattern,
+  replicateApiTokenPattern,
+  huggingFaceOrgTokenPattern,
+  langsmithApiKeyPattern
 ];
 
 // src/patterns/pii.ts
@@ -368,6 +438,75 @@ var PII_PATTERNS = [
   ssnPattern,
   creditCardPattern
 ];
+
+// src/patterns/vn.ts
+function hasValidProvinceCode(id) {
+  const province = Number(id.slice(0, 3));
+  return province >= 1 && province <= 96;
+}
+var vnCitizenIdPattern = {
+  id: "vn-citizen-id",
+  name: "Vietnamese Citizen ID (CCCD)",
+  category: "pii",
+  severity: "high",
+  regex: /(?<![\w$])0\d{11}(?!\d)/g,
+  placeholder: "VN_CITIZEN_ID",
+  description: "12-digit Vietnamese citizen identity card number (CCCD) with a valid province code",
+  validator: hasValidProvinceCode
+};
+var vnIdNumberPattern = {
+  id: "vn-id-number",
+  name: "Vietnamese ID Number (CMND/CCCD, with context)",
+  category: "pii",
+  severity: "high",
+  regex: /(?:CMND|CCCD|CMT|căn cước|can cuoc|chứng minh|chung minh)(?:\s+(?:số|so|no\.?))?[\s:#.=-]*(\d{9}|\d{12})(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_ID_NUMBER",
+  description: "9-digit CMND or 12-digit CCCD number preceded by an ID keyword"
+};
+var vnTaxCodePattern = {
+  id: "vn-tax-code",
+  name: "Vietnamese Tax Code (MST)",
+  category: "pii",
+  severity: "medium",
+  regex: /(?:MST|mã số thuế|ma so thue|tax\s*code)[\s:#.=-]*(\d{10}(?:-\d{3})?)(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_TAX_CODE",
+  description: "10- or 13-digit Vietnamese tax code preceded by MST / m\xE3 s\u1ED1 thu\u1EBF"
+};
+var vnBankAccountPattern = {
+  id: "vn-bank-account",
+  name: "Vietnamese Bank Account Number",
+  category: "pii",
+  severity: "high",
+  regex: /(?:STK|số tài khoản|so tai khoan|tài khoản số|tai khoan so|account\s*(?:no\.?|number))[\s:#.=-]*(\d{6,20})(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_BANK_ACCOUNT",
+  description: "Bank account number preceded by STK / s\u1ED1 t\xE0i kho\u1EA3n / account number"
+};
+var VN_PII_PATTERNS = [
+  vnCitizenIdPattern,
+  vnIdNumberPattern,
+  vnTaxCodePattern,
+  vnBankAccountPattern
+];
+
+// src/patterns/presets.ts
+var PATTERN_PRESETS = {
+  "vn-pii": VN_PII_PATTERNS
+};
+function resolvePresets(names) {
+  if (!names || names.length === 0) return [];
+  const out = [];
+  for (const name of names) {
+    const preset = PATTERN_PRESETS[name];
+    if (!preset) {
+      throw new Error(`Unknown preset "${name}". Available presets: ${Object.keys(PATTERN_PRESETS).join(", ")}`);
+    }
+    out.push(...preset);
+  }
+  return out;
+}
 
 // src/patterns/index.ts
 var DEFAULT_PATTERNS = [
@@ -698,13 +837,14 @@ var RedactEngine = class {
     const startTime = performance.now();
     const reversible = options?.reversible ?? false;
     const vault = options?.vault ?? this.vault ?? (reversible ? new Vault() : void 0);
-    let activePatterns = options?.customPatterns ? [...this.patterns, ...options.customPatterns] : [...this.patterns];
+    const presetPatterns = resolvePresets(options?.presets);
+    let activePatterns = [...this.patterns, ...presetPatterns, ...options?.customPatterns ?? []];
     if (options?.detectHighEntropy) {
       activePatterns.push(createHighEntropyPattern(options.entropy));
     }
     if (options?.include && options.include.length > 0) {
       const includeSet = new Set(options.include);
-      const customIds = new Set((options.customPatterns ?? []).map((p) => p.id));
+      const customIds = new Set([...options.customPatterns ?? [], ...presetPatterns].map((p) => p.id));
       activePatterns = activePatterns.filter(
         (p) => includeSet.has(p.id) || customIds.has(p.id) || options.detectHighEntropy && p.id === "generic-high-entropy-secret"
       );

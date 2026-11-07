@@ -1,3 +1,4 @@
+import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from 'crypto';
 import { Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
 import { existsSync, readFileSync } from 'fs';
@@ -236,6 +237,69 @@ var mailgunApiKeyPattern = {
   placeholder: "MAILGUN_API_KEY",
   description: "Mailgun API authentication key"
 };
+var openrouterApiKeyPattern = {
+  id: "openrouter-api-key",
+  name: "OpenRouter API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bsk-or-v1-[a-f0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: "OPENROUTER_API_KEY",
+  description: "OpenRouter API key (sk-or-v1-...)"
+};
+var groqApiKeyPattern = {
+  id: "groq-api-key",
+  name: "Groq API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bgsk_[A-Za-z0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: "GROQ_API_KEY",
+  description: "Groq API key (gsk_...)"
+};
+var xaiApiKeyPattern = {
+  id: "xai-api-key",
+  name: "xAI API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bxai-[A-Za-z0-9]{60,}(?![A-Za-z0-9_])/g,
+  placeholder: "XAI_API_KEY",
+  description: "xAI (Grok) API key (xai-...)"
+};
+var perplexityApiKeyPattern = {
+  id: "perplexity-api-key",
+  name: "Perplexity API Key",
+  category: "credential",
+  severity: "critical",
+  regex: /\bpplx-[A-Za-z0-9]{32,}(?![A-Za-z0-9_])/g,
+  placeholder: "PERPLEXITY_API_KEY",
+  description: "Perplexity API key (pplx-...)"
+};
+var replicateApiTokenPattern = {
+  id: "replicate-api-token",
+  name: "Replicate API Token",
+  category: "credential",
+  severity: "critical",
+  regex: /\br8_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: "REPLICATE_API_TOKEN",
+  description: "Replicate API token (r8_...)"
+};
+var huggingFaceOrgTokenPattern = {
+  id: "huggingface-org-token",
+  name: "Hugging Face Organization Token",
+  category: "credential",
+  severity: "high",
+  regex: /\bapi_org_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: "HUGGINGFACE_ORG_TOKEN",
+  description: "Hugging Face organization API token (api_org_...)"
+};
+var langsmithApiKeyPattern = {
+  id: "langsmith-api-key",
+  name: "LangSmith API Key",
+  category: "credential",
+  severity: "high",
+  regex: /\blsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}(?![A-Za-z0-9_])/g,
+  placeholder: "LANGSMITH_API_KEY",
+  description: "LangSmith / LangChain personal or service key (lsv2_pt_ / lsv2_sk_)"
+};
 var CREDENTIAL_PATTERNS = [
   anthropicApiKeyPattern,
   openaiApiKeyPattern,
@@ -261,7 +325,14 @@ var CREDENTIAL_PATTERNS = [
   azureStorageKeyPattern,
   gcpOauthSecretPattern,
   digitalOceanTokenPattern,
-  mailgunApiKeyPattern
+  mailgunApiKeyPattern,
+  openrouterApiKeyPattern,
+  groqApiKeyPattern,
+  xaiApiKeyPattern,
+  perplexityApiKeyPattern,
+  replicateApiTokenPattern,
+  huggingFaceOrgTokenPattern,
+  langsmithApiKeyPattern
 ];
 
 // src/patterns/pii.ts
@@ -358,6 +429,75 @@ var PII_PATTERNS = [
   ssnPattern,
   creditCardPattern
 ];
+
+// src/patterns/vn.ts
+function hasValidProvinceCode(id) {
+  const province = Number(id.slice(0, 3));
+  return province >= 1 && province <= 96;
+}
+var vnCitizenIdPattern = {
+  id: "vn-citizen-id",
+  name: "Vietnamese Citizen ID (CCCD)",
+  category: "pii",
+  severity: "high",
+  regex: /(?<![\w$])0\d{11}(?!\d)/g,
+  placeholder: "VN_CITIZEN_ID",
+  description: "12-digit Vietnamese citizen identity card number (CCCD) with a valid province code",
+  validator: hasValidProvinceCode
+};
+var vnIdNumberPattern = {
+  id: "vn-id-number",
+  name: "Vietnamese ID Number (CMND/CCCD, with context)",
+  category: "pii",
+  severity: "high",
+  regex: /(?:CMND|CCCD|CMT|căn cước|can cuoc|chứng minh|chung minh)(?:\s+(?:số|so|no\.?))?[\s:#.=-]*(\d{9}|\d{12})(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_ID_NUMBER",
+  description: "9-digit CMND or 12-digit CCCD number preceded by an ID keyword"
+};
+var vnTaxCodePattern = {
+  id: "vn-tax-code",
+  name: "Vietnamese Tax Code (MST)",
+  category: "pii",
+  severity: "medium",
+  regex: /(?:MST|mã số thuế|ma so thue|tax\s*code)[\s:#.=-]*(\d{10}(?:-\d{3})?)(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_TAX_CODE",
+  description: "10- or 13-digit Vietnamese tax code preceded by MST / m\xE3 s\u1ED1 thu\u1EBF"
+};
+var vnBankAccountPattern = {
+  id: "vn-bank-account",
+  name: "Vietnamese Bank Account Number",
+  category: "pii",
+  severity: "high",
+  regex: /(?:STK|số tài khoản|so tai khoan|tài khoản số|tai khoan so|account\s*(?:no\.?|number))[\s:#.=-]*(\d{6,20})(?!\d)/giu,
+  secretGroup: 1,
+  placeholder: "VN_BANK_ACCOUNT",
+  description: "Bank account number preceded by STK / s\u1ED1 t\xE0i kho\u1EA3n / account number"
+};
+var VN_PII_PATTERNS = [
+  vnCitizenIdPattern,
+  vnIdNumberPattern,
+  vnTaxCodePattern,
+  vnBankAccountPattern
+];
+
+// src/patterns/presets.ts
+var PATTERN_PRESETS = {
+  "vn-pii": VN_PII_PATTERNS
+};
+function resolvePresets(names) {
+  if (!names || names.length === 0) return [];
+  const out = [];
+  for (const name of names) {
+    const preset = PATTERN_PRESETS[name];
+    if (!preset) {
+      throw new Error(`Unknown preset "${name}". Available presets: ${Object.keys(PATTERN_PRESETS).join(", ")}`);
+    }
+    out.push(...preset);
+  }
+  return out;
+}
 
 // src/patterns/index.ts
 var DEFAULT_PATTERNS = [
@@ -688,13 +828,14 @@ var RedactEngine = class {
     const startTime = performance.now();
     const reversible = options?.reversible ?? false;
     const vault = options?.vault ?? this.vault ?? (reversible ? new Vault() : void 0);
-    let activePatterns = options?.customPatterns ? [...this.patterns, ...options.customPatterns] : [...this.patterns];
+    const presetPatterns = resolvePresets(options?.presets);
+    let activePatterns = [...this.patterns, ...presetPatterns, ...options?.customPatterns ?? []];
     if (options?.detectHighEntropy) {
       activePatterns.push(createHighEntropyPattern(options.entropy));
     }
     if (options?.include && options.include.length > 0) {
       const includeSet = new Set(options.include);
-      const customIds = new Set((options.customPatterns ?? []).map((p) => p.id));
+      const customIds = new Set([...options.customPatterns ?? [], ...presetPatterns].map((p) => p.id));
       activePatterns = activePatterns.filter(
         (p) => includeSet.has(p.id) || customIds.has(p.id) || options.detectHighEntropy && p.id === "generic-high-entropy-secret"
       );
@@ -866,6 +1007,68 @@ function redact(text, options) {
 }
 function unmask(text, vault) {
   return defaultEngine.unmask(text, vault);
+}
+var FORMAT = "agent-redact-vault";
+var VERSION = 1;
+var KDF = { name: "scrypt", N: 32768, r: 8, p: 1 };
+function headerAad(file) {
+  return Buffer.from(JSON.stringify([file.format, file.version, file.kdf, file.cipher]), "utf8");
+}
+function deriveKey(passphrase, salt, kdf) {
+  return scryptSync(passphrase.normalize("NFC"), salt, 32, {
+    N: kdf.N,
+    r: kdf.r,
+    p: kdf.p,
+    maxmem: 256 * kdf.N * kdf.r
+  });
+}
+function isEncryptedVault(content) {
+  try {
+    const parsed = JSON.parse(content);
+    return parsed?.format === FORMAT;
+  } catch {
+    return false;
+  }
+}
+function encryptVaultJson(json, passphrase) {
+  if (typeof passphrase !== "string" || passphrase.length === 0) {
+    throw new Error("A non-empty passphrase is required to encrypt a vault");
+  }
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const kdf = { ...KDF, salt: salt.toString("base64") };
+  const header = { format: FORMAT, version: VERSION, kdf, cipher: "aes-256-gcm" };
+  const cipher = createCipheriv("aes-256-gcm", deriveKey(passphrase, salt, kdf), iv);
+  cipher.setAAD(headerAad(header));
+  const data = Buffer.concat([cipher.update(json, "utf8"), cipher.final()]);
+  const file = {
+    ...header,
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    data: data.toString("base64")
+  };
+  return JSON.stringify(file, null, 2) + "\n";
+}
+function decryptVaultJson(content, passphrase) {
+  const fail = () => new Error("Cannot decrypt vault: wrong passphrase or corrupted file");
+  let file;
+  try {
+    file = JSON.parse(content);
+  } catch {
+    throw fail();
+  }
+  if (file?.format !== FORMAT || file.version !== VERSION || file.cipher !== "aes-256-gcm" || file.kdf?.name !== "scrypt") {
+    throw fail();
+  }
+  try {
+    const key = deriveKey(passphrase, Buffer.from(file.kdf.salt, "base64"), file.kdf);
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(file.iv, "base64"));
+    decipher.setAAD(headerAad(file));
+    decipher.setAuthTag(Buffer.from(file.tag, "base64"));
+    return Buffer.concat([decipher.update(Buffer.from(file.data, "base64")), decipher.final()]).toString("utf8");
+  } catch {
+    throw fail();
+  }
 }
 var PEM_BEGIN_PATTERN = /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/;
 var PEM_END_PATTERN = /-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:\r?\n)?/;
@@ -1334,6 +1537,12 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
     const raw = readFileSync(targetPath, "utf-8");
     const parsed = JSON.parse(raw);
     const resolvedCustomPatterns = parsed.customPatterns?.map(resolveCustomPattern);
+    if (parsed.presets !== void 0) {
+      if (!Array.isArray(parsed.presets) || parsed.presets.some((p) => typeof p !== "string")) {
+        throw new Error('"presets" must be an array of preset names');
+      }
+      resolvePresets(parsed.presets);
+    }
     return {
       ...parsed,
       customPatterns: resolvedCustomPatterns
@@ -1453,6 +1662,6 @@ function createExpressMiddleware(options = {}) {
   };
 }
 
-export { CREDENTIAL_PATTERNS, DEFAULT_PATTERNS, PATTERN_MAP, PII_PATTERNS, RedactEngine, RedactTransformStream, StreamingUnmasker, UnmaskTransformStream, Vault, anthropicApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, azureStorageKeyPattern, basicAuthUrlPattern, calculateShannonEntropy, createExpressMiddleware, createHighEntropyPattern, createRedactStream, createUnmaskStream, creditCardPattern, databaseUriPattern, databaseUrlPattern, digitalOceanTokenPattern, discordTokenPattern, emailPattern, gcpOauthSecretPattern, githubTokenPattern, gitlabTokenPattern, googleApiKeyPattern, huggingFaceTokenPattern, ipv4Pattern, ipv6Pattern, isHighEntropyToken, isToolUnmaskAllowed, jsonStringEscape, jwtTokenPattern, loadConfig, mailgunApiKeyPattern, npmTokenPattern, openaiApiKeyPattern, parseRegexString, phonePattern, privateKeyPattern, redact, redactDeep, resolveCustomPattern, sendgridApiKeyPattern, slackTokenPattern, ssnPattern, stripeKeyPattern, supabaseKeyPattern, telegramBotTokenPattern, twilioAccountSidPattern, twilioApiKeyPattern, unmask, unmaskAnthropicStream, unmaskDeep, unmaskOpenAIStream, unmaskTextStream, wrapAgent };
+export { CREDENTIAL_PATTERNS, DEFAULT_PATTERNS, PATTERN_MAP, PATTERN_PRESETS, PII_PATTERNS, RedactEngine, RedactTransformStream, StreamingUnmasker, UnmaskTransformStream, VN_PII_PATTERNS, Vault, anthropicApiKeyPattern, awsAccessKeyPattern, awsSecretKeyPattern, azureStorageKeyPattern, basicAuthUrlPattern, calculateShannonEntropy, createExpressMiddleware, createHighEntropyPattern, createRedactStream, createUnmaskStream, creditCardPattern, databaseUriPattern, databaseUrlPattern, decryptVaultJson, digitalOceanTokenPattern, discordTokenPattern, emailPattern, encryptVaultJson, gcpOauthSecretPattern, githubTokenPattern, gitlabTokenPattern, googleApiKeyPattern, groqApiKeyPattern, huggingFaceOrgTokenPattern, huggingFaceTokenPattern, ipv4Pattern, ipv6Pattern, isEncryptedVault, isHighEntropyToken, isToolUnmaskAllowed, jsonStringEscape, jwtTokenPattern, langsmithApiKeyPattern, loadConfig, mailgunApiKeyPattern, npmTokenPattern, openaiApiKeyPattern, openrouterApiKeyPattern, parseRegexString, perplexityApiKeyPattern, phonePattern, privateKeyPattern, redact, redactDeep, replicateApiTokenPattern, resolveCustomPattern, resolvePresets, sendgridApiKeyPattern, slackTokenPattern, ssnPattern, stripeKeyPattern, supabaseKeyPattern, telegramBotTokenPattern, twilioAccountSidPattern, twilioApiKeyPattern, unmask, unmaskAnthropicStream, unmaskDeep, unmaskOpenAIStream, unmaskTextStream, vnBankAccountPattern, vnCitizenIdPattern, vnIdNumberPattern, vnTaxCodePattern, wrapAgent, xaiApiKeyPattern };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

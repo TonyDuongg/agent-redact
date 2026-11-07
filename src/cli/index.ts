@@ -5,6 +5,7 @@ import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
 import { loadConfig } from '../core/config.js';
 import { readTextForScan } from '../core/files.js';
+import { encryptVaultJson, decryptVaultJson, isEncryptedVault } from '../core/vault-crypto.js';
 import { VERSION } from '../version.js';
 import {
   runScan,
@@ -23,6 +24,37 @@ function writeSecureFile(filePath: string, content: string): void {
     chmodSync(filePath, 0o600);
   } catch {
     // chmod may be a no-op on non-POSIX / Windows
+  }
+}
+
+/**
+ * Passphrase for vault encryption: the env var named by --vault-key-env (required to be set
+ * when the flag is used), otherwise AGENT_REDACT_VAULT_KEY. Read from the environment, never
+ * from argv, so it does not show up in shell history or process listings.
+ */
+function resolveVaultKey(vaultKeyEnv: string | undefined): string | undefined {
+  if (vaultKeyEnv) {
+    const value = process.env[vaultKeyEnv];
+    if (!value) {
+      console.error(`${colors.red}Error:${colors.reset} environment variable ${vaultKeyEnv} (from --vault-key-env) is not set or empty.`);
+      process.exit(2);
+    }
+    return value;
+  }
+  return process.env['AGENT_REDACT_VAULT_KEY'] || undefined;
+}
+
+function saveVault(path: string, vault: Vault, vaultKeyEnv: string | undefined): void {
+  const key = resolveVaultKey(vaultKeyEnv);
+  writeSecureFile(path, key ? encryptVaultJson(vault.toJSON(), key) : vault.toJSON());
+  if (key) {
+    console.error(`${colors.green}✔${colors.reset} Encrypted session vault saved to ${path}`);
+  } else {
+    console.error(`${colors.green}✔${colors.reset} Session vault saved to ${path}`);
+    console.error(
+      `${colors.yellow}⚠${colors.reset} The vault is stored unencrypted and contains the original secrets. ` +
+        'Use --vault-key-env <VAR> (or AGENT_REDACT_VAULT_KEY) to encrypt it.'
+    );
   }
 }
 
@@ -69,6 +101,7 @@ ${colors.bold}OPTIONS:${colors.reset}
   --entropy                   Enable Shannon entropy detection for generic secrets
   --check, --fail-on-leak     Exit with code 1 if any secrets are detected (CI/pre-commit)
   --vault-out <file>          Save generated session vault mappings to JSON file
+  --vault-key-env <VAR>       Encrypt/decrypt the vault with the passphrase in env var VAR
   --unmask <vaultFile>        Restore previously masked file using saved vault file
   --stats                     Display leak statistics breakdown table
   -h, --help                  Show this help message
@@ -132,7 +165,8 @@ async function main(): Promise<void> {
     '--format',
     '--report',
     '--baseline',
-    '--write-baseline'
+    '--write-baseline',
+    '--vault-key-env'
   ]);
   const BOOLEAN_FLAGS = new Set([
     '-r',
@@ -198,6 +232,8 @@ async function main(): Promise<void> {
   const reportArg = valueAfter('--report');
   const baselineArg = valueAfter('--baseline');
   const writeBaselineArg = valueAfter('--write-baseline');
+  const vaultKeyArg = valueAfter('--vault-key-env');
+  const vaultKeyEnv = vaultKeyArg.value;
   const isStaged = args.includes('--staged');
 
   // Track argument indices that belong to flags with values
@@ -206,7 +242,7 @@ async function main(): Promise<void> {
   if (vaultOutIdx !== -1) skipIndices.add(vaultOutIdx + 1);
   if (unmaskIdx !== -1) skipIndices.add(unmaskIdx + 1);
   if (configIdx !== -1) skipIndices.add(configIdx + 1);
-  for (const a of [formatArg, reportArg, baselineArg, writeBaselineArg]) {
+  for (const a of [formatArg, reportArg, baselineArg, writeBaselineArg, vaultKeyArg]) {
     if (a.index !== -1) skipIndices.add(a.index + 1);
   }
 
@@ -294,6 +330,7 @@ async function main(): Promise<void> {
           allowlist: loadedConfig?.allowlist,
           customPatterns: loadedConfig?.customPatterns,
           detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+          presets: loadedConfig?.presets,
           entropy: loadedConfig?.entropy
         }
       });
@@ -355,14 +392,14 @@ async function main(): Promise<void> {
         allowlist: loadedConfig?.allowlist,
         customPatterns: loadedConfig?.customPatterns,
         detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+        presets: loadedConfig?.presets,
         entropy: loadedConfig?.entropy
       })
     }));
 
     // Persist the vault BEFORE rewriting inputs, so placeholders are always recoverable
     if (vaultOutFile && vault) {
-      writeSecureFile(vaultOutFile, vault.toJSON());
-      console.error(`${colors.green}✔${colors.reset} Session vault saved to ${vaultOutFile}`);
+      saveVault(vaultOutFile, vault, vaultKeyEnv);
     }
 
     for (const { file, res } of results) {
@@ -405,9 +442,32 @@ async function main(): Promise<void> {
 
   // Handle unmask mode
   if (unmaskVaultFile) {
+    let rawVault: string;
     try {
-      const rawVault = readFileSync(unmaskVaultFile, 'utf-8');
-      const vault = Vault.fromJSON(rawVault);
+      rawVault = readFileSync(unmaskVaultFile, 'utf-8');
+    } catch {
+      console.error(`${colors.red}Error:${colors.reset} Cannot read vault file: ${unmaskVaultFile}`);
+      process.exit(1);
+    }
+    let vaultJson = rawVault;
+    if (isEncryptedVault(rawVault)) {
+      const key = resolveVaultKey(vaultKeyEnv);
+      if (!key) {
+        console.error(
+          `${colors.red}Error:${colors.reset} ${unmaskVaultFile} is encrypted; pass --vault-key-env <VAR> ` +
+            '(or set AGENT_REDACT_VAULT_KEY) with the passphrase.'
+        );
+        process.exit(2);
+      }
+      try {
+        vaultJson = decryptVaultJson(rawVault, key);
+      } catch (err: unknown) {
+        console.error(`${colors.red}Error:${colors.reset} ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    }
+    try {
+      const vault = Vault.fromJSON(vaultJson);
       const restoredText = unmask(content, vault);
 
       if (outputFile) {
@@ -436,13 +496,13 @@ async function main(): Promise<void> {
     allowlist: loadedConfig?.allowlist,
     customPatterns: loadedConfig?.customPatterns,
     detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+    presets: loadedConfig?.presets,
     entropy: loadedConfig?.entropy
   });
 
   // Save vault file if requested
   if (vaultOutFile && vault) {
-    writeSecureFile(vaultOutFile, vault.toJSON());
-    console.error(`${colors.green}✔${colors.reset} Session vault saved to ${vaultOutFile}`);
+    saveVault(vaultOutFile, vault, vaultKeyEnv);
   }
 
   // Output formatting
