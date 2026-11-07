@@ -1,8 +1,20 @@
 import { execFileSync } from 'node:child_process';
 
+/**
+ * Hardening for repositories we do not trust: a scanned directory may carry its own
+ * .git/config, and `core.fsmonitor` there is executed by commands such as `ls-files`
+ * (verified by tests/scan-cli.test.ts). Disable every config-driven helper we could trigger.
+ */
+const HARDENING = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.pager=cat'];
+
 // Arguments are passed as an array (no shell), so paths can never inject commands.
 const run = (args: string[], cwd: string): Buffer =>
-  execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 });
+  execFileSync('git', [...HARDENING, ...args], {
+    cwd,
+    stdio: ['ignore', 'pipe', 'ignore'],
+    maxBuffer: 256 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
+  });
 
 const splitNul = (buf: Buffer): string[] => buf.toString('utf8').split('\0').filter(Boolean);
 
@@ -34,7 +46,10 @@ export function gitRoot(cwd: string): string {
   return run(['rev-parse', '--show-toplevel'], cwd).toString('utf8').trim();
 }
 
-/** Content of `path` as staged in the index (what will actually be committed) */
+/**
+ * Raw content of `path` as staged in the index (what will actually be committed).
+ * `cat-file blob` never applies textconv or other content filters, unlike `show`.
+ */
 export function gitStagedContent(path: string, repoRoot: string): Buffer {
-  return run(['show', `:${path}`], repoRoot);
+  return run(['cat-file', 'blob', `:${path}`], repoRoot);
 }

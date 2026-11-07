@@ -1487,7 +1487,13 @@ init_version();
 
 // src/cli/scan.ts
 init_files();
-var run = (args, cwd) => child_process.execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
+var HARDENING = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.pager=cat"];
+var run = (args, cwd) => child_process.execFileSync("git", [...HARDENING, ...args], {
+  cwd,
+  stdio: ["ignore", "pipe", "ignore"],
+  maxBuffer: 256 * 1024 * 1024,
+  env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" }
+});
 var splitNul = (buf) => buf.toString("utf8").split("\0").filter(Boolean);
 function isGitWorkTree(cwd) {
   try {
@@ -1506,7 +1512,7 @@ function gitRoot(cwd) {
   return run(["rev-parse", "--show-toplevel"], cwd).toString("utf8").trim();
 }
 function gitStagedContent(path, repoRoot) {
-  return run(["show", `:${path}`], repoRoot);
+  return run(["cat-file", "blob", `:${path}`], repoRoot);
 }
 
 // src/core/scan.ts
@@ -1741,46 +1747,171 @@ ${c.green}[agent-redact] All ${outcome.filesScanned} files are clean.${c.reset}$
 
 // src/cli/hook.ts
 init_engine();
-init_files();
 var READER_RE = /(?:^|[\s;&|(`$])(?:cat|tac|head|tail|less|more|bat|nl|grep|egrep|fgrep|rg|ag|awk|gawk|sed|cut|sort|uniq|strings|xxd|od|hexdump|base64|jq|yq|type|Get-Content|gc|Select-String|findstr)(?=\s)/i;
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+var PATH_ONLY_TOOLS = /* @__PURE__ */ new Set(["Glob", "LS", "TodoWrite"]);
+var TRUSTED_TOOLS = /* @__PURE__ */ new Set([
+  "mcp__agent-redact__scan_file",
+  "mcp__agent-redact__redact_text",
+  "mcp__agent-redact__unmask_text",
+  "mcp__agent-redact__get_vault_status",
+  "mcp__agent-redact__clear_vault",
+  "mcp__agent-redact__list_supported_patterns"
+]);
+var PATH_KEYS = ["file_path", "filePath", "path", "paths", "notebook_path", "file", "filename", "uri"];
 var MAX_BASH_FILE_ARGS = 50;
+var HOOK_MAX_FILE_BYTES = 64 * 1024 * 1024;
+var GREP_MAX_FILES = 5e3;
+var GREP_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
+var str = (v) => typeof v === "string" ? v : "";
 function summarize(text, options) {
   const res = redact(text, { ...options, reversible: false });
-  const types = [...new Set(res.matches.map((m) => m.patternName))].join(", ");
-  return { count: res.totalLeaks, types };
+  return { count: res.totalLeaks, types: [...new Set(res.matches.map((m) => m.patternName))].join(", ") };
 }
-function redactOptionsFor(cwd) {
-  let config = null;
+function redactOptionsFor(cwd, configPath) {
+  if (configPath) {
+    const c2 = loadConfig(configPath, cwd);
+    return {
+      include: c2?.include,
+      exclude: c2?.exclude,
+      allowlist: c2?.allowlist,
+      customPatterns: c2?.customPatterns,
+      detectHighEntropy: c2?.detectHighEntropy ?? false,
+      entropy: c2?.entropy
+    };
+  }
+  let c = null;
   try {
-    config = loadConfig(void 0, cwd);
+    c = loadConfig(void 0, cwd);
   } catch {
   }
   return {
-    include: config?.include,
-    exclude: config?.exclude,
-    allowlist: config?.allowlist,
-    customPatterns: config?.customPatterns,
-    detectHighEntropy: config?.detectHighEntropy ?? false,
-    entropy: config?.entropy
+    customPatterns: c?.customPatterns,
+    detectHighEntropy: c?.detectHighEntropy === true,
+    entropy: c?.detectHighEntropy === true ? c.entropy : void 0
   };
 }
-function fileSecrets(path$1, cwd, options) {
+function decodeForScan(buf) {
+  if (buf[0] === 255 && buf[1] === 254) return buf.subarray(2).toString("utf16le");
+  if (buf[0] === 254 && buf[1] === 255) return Buffer.from(buf.subarray(2)).swap16().toString("utf16le");
+  const sample = buf.subarray(0, 8192);
+  if (!sample.includes(0)) return buf.toString("utf8");
+  let oddZeros = 0;
+  let evenZeros = 0;
+  for (let i = 0; i < sample.length; i++) if (sample[i] === 0) i % 2 ? oddZeros++ : evenZeros++;
+  const half = sample.length / 2;
+  if (oddZeros > half * 0.3 && evenZeros < half * 0.05) return buf.toString("utf16le");
+  if (evenZeros > half * 0.3 && oddZeros < half * 0.05) {
+    return Buffer.from(buf.subarray(0, buf.length - buf.length % 2)).swap16().toString("utf16le");
+  }
+  return (buf.toString("latin1").match(/[\x20-\x7e\t]{6,}/g) ?? []).join("\n");
+}
+function checkFile(path$1, cwd, options) {
   const abs = path.isAbsolute(path$1) ? path$1 : path.resolve(cwd, path$1);
+  let size;
   try {
-    if (!fs.statSync(abs).isFile()) return null;
+    const st = fs.statSync(abs);
+    if (!st.isFile()) return null;
+    size = st.size;
   } catch {
     return null;
   }
-  const read = readTextForScan(abs);
-  if (!read.ok) return null;
-  const s = summarize(read.content, options);
-  return s.count > 0 ? s : null;
+  if (size > HOOK_MAX_FILE_BYTES) return { kind: "too-large" };
+  let text;
+  try {
+    text = decodeForScan(fs.readFileSync(abs));
+  } catch {
+    return null;
+  }
+  const summary = summarize(text, options);
+  return summary.count > 0 ? { kind: "secrets", summary, text } : null;
 }
-var str = (v) => typeof v === "string" ? v : "";
+function fileBlockMessage(what, path, check) {
+  if (check.kind === "too-large") {
+    return `agent-redact blocked ${what} ${path}: the file is larger than 64 MB and cannot be verified to be free of secrets. Ask the user first.`;
+  }
+  return `agent-redact blocked ${what} ${path}: it contains ${check.summary.count} secret(s) (${check.summary.types}). Ask the user first, or use the agent-redact MCP tool scan_file to read a redacted copy.`;
+}
+function globToRegExp(glob) {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    if (ch === "*") {
+      if (glob[i + 1] === "*") {
+        re += ".*";
+        i++;
+        if (glob[i + 1] === "/") i++;
+      } else re += "[^/]*";
+    } else if (ch === "?") re += "[^/]";
+    else if (ch === "{") re += "(?:";
+    else if (ch === "}") re += ")";
+    else if (ch === ",") re += "|";
+    else re += ch.replace(/[.+^$()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`);
+}
+function checkGrep(input, cwd, options) {
+  if (input["output_mode"] !== "content") return { block: false };
+  const target = str(input["path"]) || cwd;
+  let matcher;
+  try {
+    matcher = new RegExp(str(input["pattern"]), input["-i"] === true ? "i" : "");
+  } catch {
+    matcher = null;
+  }
+  const ctx = (k) => typeof input[k] === "number" ? input[k] : 0;
+  const before = Math.max(ctx("-B"), ctx("-C"));
+  const after = Math.max(ctx("-A"), ctx("-C"));
+  const glob = str(input["glob"]);
+  const globRe = glob ? globToRegExp(glob) : null;
+  let files;
+  try {
+    files = expandTargets([target], cwd);
+  } catch {
+    return { block: false };
+  }
+  if (globRe) {
+    files = files.filter((f) => {
+      const rel = path.relative(cwd, f).split("\\").join("/");
+      return globRe.test(glob.includes("/") ? rel : rel.split("/").pop());
+    });
+  }
+  if (files.length > GREP_MAX_FILES) {
+    return { block: true, message: `agent-redact blocked Grep: ${files.length} files are too many to verify. Narrow the path or glob.` };
+  }
+  let total = 0;
+  for (const file of files) {
+    try {
+      total += fs.statSync(file).size;
+    } catch {
+      continue;
+    }
+    if (total > GREP_MAX_TOTAL_BYTES) {
+      return { block: true, message: "agent-redact blocked Grep: the search covers too much data to verify. Narrow the path or glob." };
+    }
+    const check = checkFile(file, cwd, options);
+    if (!check) continue;
+    if (check.kind === "too-large") return { block: true, message: fileBlockMessage("searching", path.relative(cwd, file), check) };
+    const starts = lineStarts(check.text);
+    const lines = check.text.split("\n");
+    const secretLines = new Set(
+      redact(check.text, { ...options, reversible: false }).matches.map((m) => positionAt(starts, m.startIndex).line)
+    );
+    const printed = (line) => {
+      for (let l = Math.max(1, line - after); l <= line + before; l++) {
+        if (!matcher || matcher.test(lines[l - 1] ?? "")) return true;
+      }
+      return false;
+    };
+    if ([...secretLines].some(printed)) {
+      return { block: true, message: fileBlockMessage("searching", path.relative(cwd, file) || file, check) };
+    }
+  }
+  return { block: false };
+}
 function evaluateHook(input, options = {}) {
   const cwd = input.cwd || process.cwd();
-  const redactOptions = redactOptionsFor(cwd);
+  const redactOptions = redactOptionsFor(cwd, options.configPath);
   const event = input.hook_event_name;
   if (event === "UserPromptSubmit") {
     const s2 = summarize(str(input.prompt), redactOptions);
@@ -1792,14 +1923,13 @@ function evaluateHook(input, options = {}) {
   if (event !== "PreToolUse") return { block: false };
   const tool = input.tool_name ?? "";
   const toolInput = input.tool_input ?? {};
+  if (TRUSTED_TOOLS.has(tool) || PATH_ONLY_TOOLS.has(tool)) return { block: false };
   if (tool === "Read") {
     const path = str(toolInput["file_path"]);
-    const s2 = path ? fileSecrets(path, cwd, redactOptions) : null;
-    return s2 ? {
-      block: true,
-      message: `agent-redact blocked reading ${path}: it contains ${s2.count} secret(s) (${s2.types}). Ask the user first, or use the agent-redact MCP tool scan_file to read a redacted copy.`
-    } : { block: false };
+    const check = path ? checkFile(path, cwd, redactOptions) : null;
+    return check ? { block: true, message: fileBlockMessage("reading", path, check) } : { block: false };
   }
+  if (tool === "Grep") return checkGrep(toolInput, cwd, redactOptions);
   if (tool === "Bash") {
     const command = str(toolInput["command"]);
     const inline = summarize(command, redactOptions);
@@ -1812,13 +1942,8 @@ function evaluateHook(input, options = {}) {
     if (READER_RE.test(command)) {
       const candidates = command.split(/[\s;&|()<>'"`=]+/).filter((t) => t && !t.startsWith("-")).slice(0, MAX_BASH_FILE_ARGS);
       for (const token of candidates) {
-        const s2 = fileSecrets(token, cwd, redactOptions);
-        if (s2) {
-          return {
-            block: true,
-            message: `agent-redact blocked this command: it would print ${token}, which contains ${s2.count} secret(s) (${s2.types}). Ask the user first, or use the agent-redact MCP tool scan_file to read a redacted copy.`
-          };
-        }
+        const check = checkFile(token, cwd, redactOptions);
+        if (check) return { block: true, message: fileBlockMessage("printing", token, check) };
       }
     }
     return { block: false };
@@ -1828,11 +1953,17 @@ function evaluateHook(input, options = {}) {
     const s2 = summarize(JSON.stringify(toolInput), redactOptions);
     return s2.count > 0 ? { block: true, message: `agent-redact blocked ${tool}: the new content contains ${s2.count} secret(s) (${s2.types}).` } : { block: false };
   }
+  for (const key of PATH_KEYS) {
+    const value = toolInput[key];
+    const paths = Array.isArray(value) ? value : [value];
+    for (const p of paths) {
+      if (typeof p !== "string" || !p) continue;
+      const check = checkFile(p, cwd, redactOptions);
+      if (check) return { block: true, message: fileBlockMessage(`${tool} on`, p, check) };
+    }
+  }
   const s = summarize(JSON.stringify(toolInput), redactOptions);
-  return s.count > 0 ? {
-    block: true,
-    message: `agent-redact blocked the ${tool} call: its input contains ${s.count} secret(s) (${s.types}).`
-  } : { block: false };
+  return s.count > 0 ? { block: true, message: `agent-redact blocked the ${tool} call: its input contains ${s.count} secret(s) (${s.types}).` } : { block: false };
 }
 async function readAll(stream) {
   let data = "";
@@ -1849,7 +1980,17 @@ async function runHook(args) {
     process.stderr.write("agent-redact hook: could not parse hook input JSON from stdin\n");
     return 1;
   }
-  const decision = evaluateHook(input, { blockWrites: args.includes("--block-writes") });
+  const configIdx = args.indexOf("--config");
+  const configPath = configIdx !== -1 ? args[configIdx + 1] : void 0;
+  let decision;
+  try {
+    decision = evaluateHook(input, { blockWrites: args.includes("--block-writes"), configPath });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`agent-redact hook: refusing because the check failed: ${msg}
+`);
+    return 2;
+  }
   if (decision.block) {
     process.stderr.write(`${decision.message}
 `);

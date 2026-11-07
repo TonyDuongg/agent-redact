@@ -518,7 +518,7 @@ npx agent-redact --staged                            # only what is about to be 
 npx agent-redact . --format sarif --report out.sarif # SARIF 2.1.0 (or --format json)
 ```
 
-Outside a git work tree, `node_modules`, `dist`, `build`, `coverage`, `.next`, `vendor`, `.venv` and similar directories are skipped. Binary files (NUL-byte sniffing) and files over 5 MB are skipped and counted in the summary.
+Outside a git work tree, `node_modules`, `dist`, `build`, `coverage`, `.next`, `vendor`, `.venv` and similar directories are skipped. Binary files (NUL-byte sniffing) and files over 5 MB are skipped and counted in the summary. Git runs with `core.fsmonitor` and other config-driven helpers disabled, so scanning an untrusted directory that carries its own `.git/config` cannot execute commands.
 
 **Accepting known findings** (test fixtures, documentation samples):
 
@@ -547,9 +547,18 @@ FIXTURE_TOKEN=ghp_...
 | :--- | :--- |
 | `UserPromptSubmit` | Blocks prompts that contain secrets (the prompt is not sent) |
 | `PreToolUse` → `Read` | Blocks reading a file that contains secrets (suggests the MCP `scan_file` tool for a redacted copy) |
+| `PreToolUse` → `Grep` (`output_mode: content`) | Blocks when a printed line, including `-A/-B/-C` context, would contain a secret; path-only modes are allowed |
 | `PreToolUse` → `Bash` | Blocks commands that contain a literal secret, or that print a file with secrets (`cat`, `grep`, `head`, `jq`, …) |
-| `PreToolUse` → `WebFetch`, `WebSearch`, MCP tools, others | Blocks calls whose input contains secrets (exfiltration guard) |
+| `PreToolUse` → `WebFetch`, `WebSearch`, MCP tools, others | Blocks calls whose input contains secrets, or whose `path`/`file_path`/`paths` point at a file with secrets (e.g. filesystem MCP servers) |
 | `PreToolUse` → `Write` / `Edit` | Allowed by default; add `--block-writes` to block secrets being written |
+
+**Fail-closed details:**
+- Large files are scanned in full; above 64 MB the read is refused.
+- UTF-16 files are decoded, and printable strings inside binary files are scanned.
+- If an unexpected error happens, the action is blocked.
+- `agent-redact-ignore` comments are not honoured.
+- From the project `.agentredactrc`, which the agent can edit, the hook only uses settings that **add** detections (`customPatterns`, entropy). `allowlist`, `include` and `exclude` are ignored unless you point the hook at a config you control: `agent-redact hook --config ~/.config/agent-redact.json`.
+- The tools of the `agent-redact` MCP server itself (`mcp__agent-redact__*`) are trusted, so `scan_file` can still read a redacted copy.
 
 Install globally (`npm i -g agent-redact`) so the hook starts fast, then add to `.claude/settings.json` (project) or `~/.claude/settings.json` (user):
 
@@ -566,9 +575,7 @@ Install globally (`npm i -g agent-redact`) so the hook starts fast, then add to 
 }
 ```
 
-The hook uses your `.agentredactrc` from the session's working directory (custom patterns, allowlist, entropy settings).
-
-> Limits: the hook sees tool **inputs**, not outputs. A command such as `env`, or a script that prints secrets indirectly, is not detected. Combine it with the MCP `scan_file` tool and deny rules for sensitive paths.
+> Limits: the hook sees tool **inputs**, not outputs. A command such as `env`, or a script that prints secrets indirectly, is not detected. Treat it as a strong guard rail rather than a sandbox, and combine it with the MCP `scan_file` tool and Claude Code deny rules for sensitive paths.
 
 ---
 

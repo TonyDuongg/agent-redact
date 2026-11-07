@@ -158,6 +158,20 @@ describe('CLI scan mode', () => {
     expect((await cli(['--staged'], repo)).code).toBe(0);
   });
 
+  it('does not execute commands from an untrusted repository git config (core.fsmonitor)', async () => {
+    const repo = gitRepo();
+    const marker = join(repo, 'PWNED');
+    const script = join(repo, 'evil.js');
+    writeFileSync(script, `require('fs').writeFileSync(${JSON.stringify(marker)}, 'x')`);
+    git(repo, 'config', 'core.fsmonitor', `node ${JSON.stringify(script).slice(1, -1)}`);
+    writeFileSync(join(repo, 'a.txt'), 'hello');
+    git(repo, '-c', 'core.fsmonitor=false', 'add', 'a.txt');
+
+    await cli(['.'], repo);
+    await cli(['--staged'], repo);
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it('rejects combining scan mode with rewriting flags', async () => {
     const dir = tmp('ar-combo-');
     writeFileSync(join(dir, 'a.env'), `K=${AWS}\n`);
@@ -227,6 +241,66 @@ describe('Claude Code hook', () => {
 
   it('allows unrelated events', () => {
     expect(evaluateHook({ hook_event_name: 'Stop' }).block).toBe(false);
+  });
+
+  const readHook = (dir: string, file_path: string) =>
+    evaluateHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path }, cwd: dir });
+
+  it('fails closed on large files: scans them in chunks instead of skipping (secret at the end)', () => {
+    const dir = tmp('ar-hook-big-');
+    writeFileSync(join(dir, 'big.log'), 'x'.repeat(7 * 1024 * 1024) + `\nK=${AWS}\n`);
+    expect(readHook(dir, 'big.log').block).toBe(true);
+  });
+
+  it('decodes UTF-16 files and scans printable strings inside binaries', () => {
+    const dir = tmp('ar-hook-bin-');
+    writeFileSync(join(dir, 'utf16.env'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`K=${AWS}\r\n`, 'utf16le')]));
+    const blob = Buffer.alloc(256);
+    blob.write(`token=${GH}`, 40);
+    writeFileSync(join(dir, 'app.bin'), blob);
+    expect(readHook(dir, 'utf16.env').block).toBe(true);
+    expect(readHook(dir, 'app.bin').block).toBe(true);
+  });
+
+  it('ignores weakening settings (allowlist/exclude/include) from the agent-writable project config', () => {
+    const dir = tmp('ar-hook-cfg-');
+    writeFileSync(join(dir, '.env'), `K=${AWS}\n`);
+    writeFileSync(
+      join(dir, '.agentredactrc'),
+      JSON.stringify({ allowlist: [AWS], exclude: ['aws-access-key-id'], include: ['email-address'] })
+    );
+    expect(readHook(dir, '.env').block).toBe(true);
+  });
+
+  it('still applies strengthening settings (custom patterns) from the project config', () => {
+    const dir = tmp('ar-hook-cfg-');
+    writeFileSync(join(dir, 'notes.txt'), 'corp_live_' + 'Z'.repeat(32));
+    writeFileSync(
+      join(dir, '.agentredactrc'),
+      JSON.stringify({ customPatterns: [{ id: 'corp', name: 'Corp token', regex: 'corp_live_[A-Z]{32}', placeholder: 'CORP' }] })
+    );
+    expect(readHook(dir, 'notes.txt').block).toBe(true);
+  });
+
+  it('blocks Grep in content mode when matching lines contain secrets; allows path-only modes', () => {
+    const dir = tmp('ar-hook-grep-');
+    writeFileSync(join(dir, '.env'), `AWS_KEY=${AWS}\nOTHER=1\n`);
+    const grep = (tool_input: Record<string, unknown>) =>
+      evaluateHook({ hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input, cwd: dir });
+    expect(grep({ pattern: 'AWS', path: dir, output_mode: 'content' }).block).toBe(true);
+    expect(grep({ pattern: 'AWS', path: '.env', output_mode: 'content' }).block).toBe(true);
+    expect(grep({ pattern: 'OTHER', path: dir, output_mode: 'content' }).block).toBe(false);
+    expect(grep({ pattern: 'AWS', path: dir }).block).toBe(false); // files_with_matches (default) shows paths only
+  });
+
+  it('checks file-path inputs of other tools (e.g. filesystem MCP servers) but trusts agent-redact scan_file', () => {
+    const dir = tmp('ar-hook-mcp-');
+    writeFileSync(join(dir, '.env'), `K=${AWS}\n`);
+    const call = (tool_name: string, tool_input: Record<string, unknown>) =>
+      evaluateHook({ hook_event_name: 'PreToolUse', tool_name, tool_input, cwd: dir });
+    expect(call('mcp__filesystem__read_file', { path: '.env' }).block).toBe(true);
+    expect(call('NotebookRead', { notebook_path: '.env' }).block).toBe(true);
+    expect(call('mcp__agent-redact__scan_file', { filePath: '.env' }).block).toBe(false);
   });
 
   it('works end to end through the CLI: exit 2 + stderr when blocking, exit 1 on bad JSON', async () => {

@@ -22,13 +22,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-file in-place mode** accepts directories, skips binaries and rewrites only files that contain secrets.
 
 ### 🛡️ Claude Code hook
-- **`agent-redact hook [--block-writes]`** reads the hook event JSON on stdin and exits 2 to block. It covers:
+- **`agent-redact hook [--block-writes] [--config <path>]`** reads the hook event JSON on stdin and exits 2 to block. It covers:
   - prompts containing secrets;
   - `Read` of files with secrets;
+  - `Grep` content output whose printed lines (including context) contain secrets;
   - `Bash` commands that contain secrets or print secret files;
-  - outbound tools (WebFetch, WebSearch, MCP…) whose input contains secrets.
+  - other tools whose input contains secrets or whose path arguments point at a secret file.
 
   Messages name secret types, never values.
+- **Fail closed:**
+  - large files are scanned in full, and reads above 64 MB are refused;
+  - UTF-16 is decoded, and printable strings in binaries are scanned;
+  - unexpected errors block;
+  - inline ignore comments are not honoured;
+  - from the agent-writable project config, only additive settings are used (`allowlist`/`include`/`exclude` require an explicit `--config`).
+
+### 🔒 Git hardening
+- Scan mode runs git with `core.fsmonitor=false` (and no untracked cache or pager). A test showed that a scanned directory's own `.git/config` could otherwise execute a command through `git ls-files`.
+- Staged content is read with `git cat-file blob`, which applies no textconv or filters.
 
 ### 🔧 Internal
 - **Single version source:** `src/version.ts`, used by the CLI, MCP server and SARIF reports; a test keeps it equal to `package.json`.
