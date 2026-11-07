@@ -24,13 +24,28 @@ function headerAad(file: Pick<EncryptedVaultFile, 'format' | 'version' | 'kdf' |
   return Buffer.from(JSON.stringify([file.format, file.version, file.kdf, file.cipher]), 'utf8');
 }
 
-function deriveKey(passphrase: string, salt: Buffer, kdf: { N: number; r: number; p: number }): Buffer {
-  return scryptSync(passphrase.normalize('NFC'), salt, 32, {
-    N: kdf.N,
-    r: kdf.r,
-    p: kdf.p,
-    maxmem: 256 * kdf.N * kdf.r
-  });
+/** Fixed memory ceiling for the format's scrypt parameters (128·N·r = 32 MiB, plus headroom) */
+const SCRYPT_MAXMEM = 64 * 1024 * 1024;
+
+/**
+ * Cost parameters are part of the format version, never taken from the file: a hostile
+ * vault with N=2^30 would otherwise make scrypt allocate gigabytes (denial of service).
+ */
+function deriveKey(passphrase: string, salt: Buffer): Buffer {
+  return scryptSync(passphrase.normalize('NFC'), salt, 32, { N: KDF.N, r: KDF.r, p: KDF.p, maxmem: SCRYPT_MAXMEM });
+}
+
+function hasExpectedKdf(kdf: unknown): kdf is { name: 'scrypt'; N: number; r: number; p: number; salt: string } {
+  const k = kdf as Record<string, unknown> | null;
+  return (
+    !!k &&
+    k['name'] === KDF.name &&
+    k['N'] === KDF.N &&
+    k['r'] === KDF.r &&
+    k['p'] === KDF.p &&
+    typeof k['salt'] === 'string' &&
+    Buffer.from(k['salt'], 'base64').length === 16
+  );
 }
 
 export function isEncryptedVault(content: string): boolean {
@@ -51,7 +66,7 @@ export function encryptVaultJson(json: string, passphrase: string): string {
   const iv = randomBytes(12);
   const kdf = { ...KDF, salt: salt.toString('base64') };
   const header = { format: FORMAT, version: VERSION, kdf, cipher: 'aes-256-gcm' } as const;
-  const cipher = createCipheriv('aes-256-gcm', deriveKey(passphrase, salt, kdf), iv);
+  const cipher = createCipheriv('aes-256-gcm', deriveKey(passphrase, salt), iv);
   cipher.setAAD(headerAad(header));
   const data = Buffer.concat([cipher.update(json, 'utf8'), cipher.final()]);
   const file: EncryptedVaultFile = {
@@ -72,11 +87,11 @@ export function decryptVaultJson(content: string, passphrase: string): string {
   } catch {
     throw fail();
   }
-  if (file?.format !== FORMAT || file.version !== VERSION || file.cipher !== 'aes-256-gcm' || file.kdf?.name !== 'scrypt') {
+  if (file?.format !== FORMAT || file.version !== VERSION || file.cipher !== 'aes-256-gcm' || !hasExpectedKdf(file.kdf)) {
     throw fail();
   }
   try {
-    const key = deriveKey(passphrase, Buffer.from(file.kdf.salt, 'base64'), file.kdf);
+    const key = deriveKey(passphrase, Buffer.from(file.kdf.salt, 'base64'));
     const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(file.iv, 'base64'));
     decipher.setAAD(headerAad(file));
     decipher.setAuthTag(Buffer.from(file.tag, 'base64'));

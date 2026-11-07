@@ -161,6 +161,11 @@ describe('Encrypted vault files', () => {
     expect(() => decryptVaultJson(JSON.stringify(flipped), 'pw-1')).toThrow(/wrong passphrase or corrupted/);
     const weaker = { ...parsed, kdf: { ...parsed.kdf, N: 1024 } };
     expect(() => decryptVaultJson(JSON.stringify(weaker), 'pw-1')).toThrow(/wrong passphrase or corrupted/);
+    // A hostile file must not make scrypt allocate gigabytes (DoS): rejected before deriving a key
+    const hostile = { ...parsed, kdf: { ...parsed.kdf, N: 2 ** 30, r: 64 } };
+    const t0 = performance.now();
+    expect(() => decryptVaultJson(JSON.stringify(hostile), 'pw-1')).toThrow(/wrong passphrase or corrupted/);
+    expect(performance.now() - t0).toBeLessThan(200);
     expect(() => encryptVaultJson('[]', '')).toThrow(/passphrase/);
   });
 

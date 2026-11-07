@@ -1651,13 +1651,13 @@ var KDF = { name: "scrypt", N: 32768, r: 8, p: 1 };
 function headerAad(file) {
   return Buffer.from(JSON.stringify([file.format, file.version, file.kdf, file.cipher]), "utf8");
 }
-function deriveKey(passphrase, salt, kdf) {
-  return crypto.scryptSync(passphrase.normalize("NFC"), salt, 32, {
-    N: kdf.N,
-    r: kdf.r,
-    p: kdf.p,
-    maxmem: 256 * kdf.N * kdf.r
-  });
+var SCRYPT_MAXMEM = 64 * 1024 * 1024;
+function deriveKey(passphrase, salt) {
+  return crypto.scryptSync(passphrase.normalize("NFC"), salt, 32, { N: KDF.N, r: KDF.r, p: KDF.p, maxmem: SCRYPT_MAXMEM });
+}
+function hasExpectedKdf(kdf) {
+  const k = kdf;
+  return !!k && k["name"] === KDF.name && k["N"] === KDF.N && k["r"] === KDF.r && k["p"] === KDF.p && typeof k["salt"] === "string" && Buffer.from(k["salt"], "base64").length === 16;
 }
 function isEncryptedVault(content) {
   try {
@@ -1675,7 +1675,7 @@ function encryptVaultJson(json, passphrase) {
   const iv = crypto.randomBytes(12);
   const kdf = { ...KDF, salt: salt.toString("base64") };
   const header = { format: FORMAT, version: VERSION, kdf, cipher: "aes-256-gcm" };
-  const cipher = crypto.createCipheriv("aes-256-gcm", deriveKey(passphrase, salt, kdf), iv);
+  const cipher = crypto.createCipheriv("aes-256-gcm", deriveKey(passphrase, salt), iv);
   cipher.setAAD(headerAad(header));
   const data = Buffer.concat([cipher.update(json, "utf8"), cipher.final()]);
   const file = {
@@ -1694,11 +1694,11 @@ function decryptVaultJson(content, passphrase) {
   } catch {
     throw fail();
   }
-  if (file?.format !== FORMAT || file.version !== VERSION || file.cipher !== "aes-256-gcm" || file.kdf?.name !== "scrypt") {
+  if (file?.format !== FORMAT || file.version !== VERSION || file.cipher !== "aes-256-gcm" || !hasExpectedKdf(file.kdf)) {
     throw fail();
   }
   try {
-    const key = deriveKey(passphrase, Buffer.from(file.kdf.salt, "base64"), file.kdf);
+    const key = deriveKey(passphrase, Buffer.from(file.kdf.salt, "base64"));
     const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(file.iv, "base64"));
     decipher.setAAD(headerAad(file));
     decipher.setAuthTag(Buffer.from(file.tag, "base64"));
