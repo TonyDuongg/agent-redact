@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { redact } from '../core/engine.js';
 import { loadConfig } from '../core/config.js';
@@ -203,14 +203,15 @@ function checkGrep(input: Record<string, unknown>, cwd: string, options: RedactO
   const glob = str(input['glob']);
   const globRe = glob ? simpleGlobToRegExp(glob) : null;
 
+  // Only a missing top-level target is allowed through (grep itself will fail on it);
+  // any error while enumerating an existing target fails closed
+  if (!existsSync(isAbsolute(target) ? target : resolve(cwd, target))) return { block: false };
   let files: string[];
   try {
     files = expandTargets([target], cwd, { excludeDirs: new Set(), includeBinaryExtensions: true });
   } catch (err: unknown) {
-    if (err instanceof UnverifiableTargetError) {
-      return { block: true, message: `agent-redact blocked Grep: ${err.message}. Narrow the path.` };
-    }
-    return { block: false }; // path does not exist: grep itself will fail
+    const reason = err instanceof UnverifiableTargetError ? err.message : 'the searched files could not be enumerated';
+    return { block: true, message: `agent-redact blocked Grep: ${reason}. Narrow the path, or ask the user.` };
   }
   if (globRe) {
     files = files.filter((f) => {

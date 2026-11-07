@@ -1886,14 +1886,13 @@ function checkGrep(input, cwd, options) {
   const target = str(input["path"]) || cwd;
   const glob = str(input["glob"]);
   const globRe = glob ? simpleGlobToRegExp(glob) : null;
+  if (!existsSync(isAbsolute(target) ? target : resolve(cwd, target))) return { block: false };
   let files;
   try {
     files = expandTargets([target], cwd, { excludeDirs: /* @__PURE__ */ new Set(), includeBinaryExtensions: true });
   } catch (err) {
-    if (err instanceof UnverifiableTargetError) {
-      return { block: true, message: `agent-redact blocked Grep: ${err.message}. Narrow the path.` };
-    }
-    return { block: false };
+    const reason = err instanceof UnverifiableTargetError ? err.message : "the searched files could not be enumerated";
+    return { block: true, message: `agent-redact blocked Grep: ${reason}. Narrow the path, or ask the user.` };
   }
   if (globRe) {
     files = files.filter((f) => {
