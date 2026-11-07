@@ -77,7 +77,9 @@ var privateKeyPattern = {
   name: "Private Key",
   category: "credential",
   severity: "critical",
-  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[\s\S]*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
+  // The body may not run past another BEGIN marker: without that, every unterminated
+  // BEGIN rescanned to the end of the input (quadratic on many BEGINs without END).
+  regex: /-----BEGIN (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----(?:(?!-----BEGIN )[\s\S])*?-----END (?:(?:RSA |OPENSSH |DSA |EC |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/g,
   placeholder: "PRIVATE_KEY",
   description: "RSA, OpenSSH, DSA, EC, Encrypted, or PGP private key certificate"
 };
@@ -269,7 +271,9 @@ var emailPattern = {
   name: "Email Address",
   category: "pii",
   severity: "medium",
-  regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // RFC 5321 length limits (local part 64, domain 253, label 63) keep matching linear;
+  // unbounded quantifiers backtracked quadratically on inputs like "a-a-a-..." (80KB took 10 s).
+  regex: /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b/g,
   placeholder: "EMAIL_ADDRESS",
   description: "Standard RFC 5322 email address"
 };
@@ -420,6 +424,13 @@ function createHighEntropyPattern(config = {}) {
 }
 
 // src/core/vault.ts
+function collectPlaceholderLiterals(text) {
+  const found = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(/\[[^[\]\r\n]{1,256}_\d+\]/g)) {
+    found.add(m[0]);
+  }
+  return found;
+}
 var Vault = class _Vault {
   placeholderToEntry = /* @__PURE__ */ new Map();
   placeholderToEntries = /* @__PURE__ */ new Map();
@@ -428,8 +439,30 @@ var Vault = class _Vault {
   maxEntries;
   /** Names (never values) of placeholders dropped by the size cap, oldest first */
   evictedPlaceholders = /* @__PURE__ */ new Set();
+  /** Bumped on every change to the placeholder set; invalidates the cached unmask regex */
+  mutations = 0;
+  unmaskRegexCache;
   constructor(options) {
     this.maxEntries = options?.maxEntries;
+  }
+  /**
+   * True when `prefix` is the beginning of at least one known placeholder.
+   * Used by streaming unmaskers to decide whether a chunk tail must be held back.
+   */
+  hasPlaceholderPrefix(prefix) {
+    for (const placeholder of this.placeholderToEntries.keys()) {
+      if (placeholder.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+  getUnmaskRegex() {
+    if (this.unmaskRegexCache?.mutations !== this.mutations) {
+      const escaped = Array.from(this.placeholderToEntries.keys()).sort((a, b) => b.length - a.length).map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+      this.unmaskRegexCache = { mutations: this.mutations, regex: new RegExp(escaped.join("|"), "g") };
+    }
+    const { regex } = this.unmaskRegexCache;
+    regex.lastIndex = 0;
+    return regex;
   }
   evictOldestIfNeeded() {
     if (this.maxEntries && this.originalToPlaceholder.size >= this.maxEntries) {
@@ -442,6 +475,7 @@ var Vault = class _Vault {
         }
         this.placeholderToEntry.delete(oldestPlaceholder);
         this.placeholderToEntries.delete(oldestPlaceholder);
+        this.mutations++;
         this.rememberEvicted(oldestPlaceholder);
       }
     }
@@ -477,7 +511,8 @@ var Vault = class _Vault {
     this.evictOldestIfNeeded();
     let count = (this.counters.get(pattern.placeholder) ?? 0) + 1;
     if (existingText) {
-      while (existingText.includes(`[${pattern.placeholder}_${count}]`)) {
+      const isTaken = typeof existingText === "string" ? (p) => existingText.includes(p) : (p) => existingText.has(p);
+      while (isTaken(`[${pattern.placeholder}_${count}]`)) {
         count++;
       }
     }
@@ -493,6 +528,7 @@ var Vault = class _Vault {
     this.placeholderToEntry.set(placeholder, entry);
     this.placeholderToEntries.set(placeholder, [entry]);
     this.originalToPlaceholder.set(original, placeholder);
+    this.mutations++;
     return placeholder;
   }
   /**
@@ -505,29 +541,29 @@ var Vault = class _Vault {
    * Replaces all placeholders in a string back with their original secrets
    * in a deterministic, collision-free single regex pass. Handles multiple
    * secrets mapped to identical custom placeholders sequentially.
+   *
+   * @param encode Optional transform applied to each restored secret, e.g. JSON string
+   *   escaping when the placeholder sits inside a JSON document.
    */
-  unmask(text) {
+  unmask(text, encode) {
     if (this.placeholderToEntries.size === 0 || !text) {
       return text;
     }
-    const placeholders = Array.from(this.placeholderToEntries.keys()).sort(
-      (a, b) => b.length - a.length
-    );
-    const escaped = placeholders.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    const regex = new RegExp(escaped.join("|"), "g");
+    const regex = this.getUnmaskRegex();
     const occurrences = /* @__PURE__ */ new Map();
+    const out = (secret) => encode ? encode(secret) : secret;
     return text.replace(regex, (matched) => {
       const list = this.placeholderToEntries.get(matched);
       if (!list || list.length === 0) {
         return matched;
       }
       if (list.length === 1) {
-        return list[0].original;
+        return out(list[0].original);
       }
       const idx = occurrences.get(matched) ?? 0;
       occurrences.set(matched, idx + 1);
       const entry = list[idx % list.length];
-      return entry.original;
+      return out(entry.original);
     });
   }
   /**
@@ -544,6 +580,7 @@ var Vault = class _Vault {
     }
     this.placeholderToEntries.set(entry.placeholder, existingList);
     this.originalToPlaceholder.set(entry.original, entry.placeholder);
+    this.mutations++;
     const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
     if (match && match[1] && match[2]) {
       const prefix = match[1];
@@ -613,6 +650,7 @@ var Vault = class _Vault {
     this.originalToPlaceholder.clear();
     this.counters.clear();
     this.evictedPlaceholders.clear();
+    this.mutations++;
   }
 };
 
@@ -716,19 +754,22 @@ var RedactEngine = class {
       return a.startIndex - b.startIndex;
     });
     const accepted = [];
+    const covered = rawMatches.length > 1 ? new Uint8Array(text.length) : void 0;
     for (const candidate of rawMatches) {
-      const hasOverlap = accepted.some(
-        (acc) => candidate.startIndex < acc.endIndex && acc.startIndex < candidate.endIndex
-      );
-      if (!hasOverlap) {
-        accepted.push(candidate);
+      if (covered) {
+        if (covered.subarray(candidate.startIndex, candidate.endIndex).includes(1)) {
+          continue;
+        }
+        covered.fill(1, candidate.startIndex, candidate.endIndex);
       }
+      accepted.push(candidate);
     }
     accepted.sort((a, b) => a.startIndex - b.startIndex);
     const matches = [];
     const stats = {};
     let redactedText = "";
     let cursor = 0;
+    let literalPlaceholders;
     for (let i = 0; i < accepted.length; i++) {
       const m = accepted[i];
       let replacement;
@@ -755,7 +796,8 @@ var RedactEngine = class {
           });
         }
       } else if (reversible && vault) {
-        replacement = vault.getOrCreate(m.secret, m.pattern, text);
+        literalPlaceholders ??= collectPlaceholderLiterals(text);
+        replacement = vault.getOrCreate(m.secret, m.pattern, literalPlaceholders);
       } else {
         replacement = `[REDACTED_${m.pattern.placeholder}]`;
       }
@@ -891,9 +933,8 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
     throw new Error(`Failed to parse agent-redact config at ${targetPath}: ${msg}`);
   }
 }
-
-// src/action/index.ts
-var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
+var DEFAULT_MAX_SCAN_BYTES = 5 * 1024 * 1024;
+var KNOWN_BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
   ".png",
   ".jpg",
   ".jpeg",
@@ -901,21 +942,102 @@ var BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
   ".ico",
   ".webp",
   ".svg",
+  ".bmp",
+  ".tif",
+  ".tiff",
+  ".avif",
+  ".psd",
   ".wasm",
   ".zip",
   ".tar",
   ".gz",
+  ".tgz",
+  ".bz2",
+  ".xz",
   ".7z",
+  ".rar",
+  ".zst",
   ".exe",
   ".dll",
   ".so",
   ".dylib",
+  ".node",
+  ".o",
+  ".a",
+  ".lib",
+  ".class",
+  ".jar",
+  ".pyc",
+  ".whl",
   ".pdf",
   ".docx",
   ".xlsx",
+  ".pptx",
   ".bin",
-  ".dat"
+  ".dat",
+  ".db",
+  ".sqlite",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+  ".eot",
+  ".mp3",
+  ".mp4",
+  ".mov",
+  ".avi",
+  ".mkv",
+  ".webm",
+  ".wav",
+  ".flac",
+  ".ogg"
 ]);
+function hasKnownBinaryExtension(path$1) {
+  return KNOWN_BINARY_EXTENSIONS.has(path.extname(path$1).toLowerCase());
+}
+function isBinaryFile(path, sampleSize = 8192) {
+  const fd = fs.openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(sampleSize);
+    const read = fs.readSync(fd, buf, 0, sampleSize, 0);
+    return buf.subarray(0, read).includes(0);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+function readTextForScan(path, maxBytes = DEFAULT_MAX_SCAN_BYTES) {
+  try {
+    const { size } = fs.statSync(path);
+    if (size > maxBytes) return { ok: false, reason: "too-large", size };
+    if (hasKnownBinaryExtension(path) || size > 0 && isBinaryFile(path)) {
+      return { ok: false, reason: "binary", size };
+    }
+    return { ok: true, content: fs.readFileSync(path, "utf-8") };
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+}
+function walkFiles(dir, excludeDirs, result = []) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return result;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== ".git" && !excludeDirs.has(entry.name)) {
+        walkFiles(fullPath, excludeDirs, result);
+      }
+    } else if (entry.isFile() && !hasKnownBinaryExtension(entry.name)) {
+      result.push(fullPath);
+    }
+  }
+  return result;
+}
+
+// src/action/index.ts
 function getInput(name, fallback = "") {
   const keyWithUnderscore = `INPUT_${name.replace(/-/g, "_").toUpperCase()}`;
   const keyWithHyphen = `INPUT_${name.toUpperCase()}`;
@@ -934,29 +1056,6 @@ function writeSummary(markdown) {
   if (summaryFile && fs.existsSync(summaryFile)) {
     fs.appendFileSync(summaryFile, markdown + "\n\n", "utf-8");
   }
-}
-function collectFiles(dir, excludeDirs, result = []) {
-  try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name.startsWith(".") && entry.name !== "." && entry.name !== "..") {
-        if (entry.name === ".git") continue;
-      }
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (!excludeDirs.has(entry.name)) {
-          collectFiles(fullPath, excludeDirs, result);
-        }
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
-        if (!BINARY_EXTENSIONS.has(ext)) {
-          result.push(fullPath);
-        }
-      }
-    }
-  } catch {
-  }
-  return result;
 }
 function escapeCommandData(value) {
   return value.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
@@ -979,6 +1078,8 @@ async function runAction() {
   const excludeDirs = new Set(
     excludeInput.split(",").map((s) => s.trim()).filter(Boolean)
   );
+  const maxFileSizeMb = Number(getInput("max-file-size", "5"));
+  const maxBytes = Number.isFinite(maxFileSizeMb) && maxFileSizeMb > 0 ? Math.floor(maxFileSizeMb * 1024 * 1024) : DEFAULT_MAX_SCAN_BYTES;
   console.log(`[agent-redact] Starting security scan on: ${scanPath}`);
   console.log(`[agent-redact] Fail on leak: ${failOnLeak} | Entropy detection: ${detectEntropy}`);
   const loadedConfig = loadConfig(configPath);
@@ -987,18 +1088,23 @@ async function runAction() {
   if (stat.isFile()) {
     filesToScan.push(scanPath);
   } else {
-    collectFiles(scanPath, excludeDirs, filesToScan);
+    walkFiles(scanPath, excludeDirs, filesToScan);
   }
   console.log(`[agent-redact] Discovered ${filesToScan.length} text files to analyze.`);
   const allLeaks = [];
+  const skipped = {
+    binary: 0,
+    "too-large": 0,
+    unreadable: 0
+  };
   const startTime = performance.now();
   for (const filePath of filesToScan) {
-    let content;
-    try {
-      content = fs.readFileSync(filePath, "utf-8");
-    } catch {
+    const read = readTextForScan(filePath, maxBytes);
+    if (!read.ok) {
+      skipped[read.reason]++;
       continue;
     }
+    const content = read.content;
     const result = redact(content, {
       include: loadedConfig?.include,
       exclude: loadedConfig?.exclude,
@@ -1023,6 +1129,11 @@ async function runAction() {
   const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
   const totalLeaks = allLeaks.length;
   const hasLeaks = totalLeaks > 0;
+  const skippedTotal = skipped.binary + skipped["too-large"] + skipped.unreadable;
+  const skippedSummary = `Skipped ${skippedTotal} file(s): ${skipped.binary} binary, ${skipped["too-large"]} larger than ${(maxBytes / (1024 * 1024)).toFixed(2)} MB, ${skipped.unreadable} unreadable.`;
+  if (skippedTotal > 0) {
+    console.log(`[agent-redact] ${skippedSummary}`);
+  }
   setOutput("has-leaks", String(hasLeaks));
   setOutput("total-leaks", String(totalLeaks));
   let summaryMd = `## \u{1F6E1}\uFE0F agent-redact Security Scan Report
@@ -1030,8 +1141,12 @@ async function runAction() {
 `;
   summaryMd += `* **Status**: ${hasLeaks ? "\u274C **Secrets Detected**" : "\u2705 **No Leaks Found**"}
 `;
-  summaryMd += `* **Files Scanned**: ${filesToScan.length}
+  summaryMd += `* **Files Scanned**: ${filesToScan.length - skippedTotal}
 `;
+  if (skippedTotal > 0) {
+    summaryMd += `* **Files Skipped**: ${skippedSummary}
+`;
+  }
   summaryMd += `* **Total Leaks Detected**: ${totalLeaks}
 `;
   summaryMd += `* **Scan Duration**: ${durationMs}ms

