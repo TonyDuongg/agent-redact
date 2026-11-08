@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.3.0] - 2026-11-08
+
+Node.js 22.18+ is now required, and the toolchain moves to Vitest 5, tsup 9 and TypeScript 7. The xAI and Replicate patterns now catch keys they used to miss, and a script checks real provider keys locally. The Python package is on PyPI, published through Trusted Publishing.
 
 ### ⚠️ Upgrade notes (behavior changes)
 - **Node.js 22.18 or newer is required** (`engines.node: ">=22.18.0"`). Node.js 20 reached end-of-life in April 2026, and the build toolchain no longer runs on it (Vitest 5 needs ≥ 22.12, tsup 9 needs ≥ 22.18). The code does not use Node 22-only APIs, but Node 20 is no longer tested or supported. This also applies to the Python package, which runs the Node.js CLI.
+- **xAI and Replicate patterns are broader:** keys containing `_` (xAI) or `-`/`_` (Replicate) are now detected and fully masked, so scans and baselines may report new findings.
 - **Type declarations are no longer bundled.** `dist/` now ships one `.d.ts` per source file, emitted by `tsc`, and no longer ships the `.d.cts` copies. The `exports` map already pointed `types` at the `.d.ts` files, and the public API is unchanged: a compiler-API dump of all 149 exports and their members is identical. ESM and CJS consumers type-check against the new package with TypeScript 5.9 and 7.0, with `skipLibCheck: false`.
 
 ### 🔧 Tooling
