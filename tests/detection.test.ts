@@ -51,11 +51,15 @@ const POSITIVES: Record<string, string[]> = {
   'gcp-oauth-client-secret': [j('GOCSPX', '-', r(28))],
   'digitalocean-token': [j('dop_', 'v1_', hex(64))],
   'mailgun-api-key': [j('key', '-', r(32))],
+  // AI provider keys at their canonical lengths (cross-checked with trufflehog / gitleaks / vendor docs).
+  // Detection lengths are lower bounds, so longer future keys still match.
   'openrouter-api-key': [j('sk-', 'or-v1-', hex(64))],
   'groq-api-key': [j('gsk_', r(52))],
-  'xai-api-key': [j('xai', '-', r(80))],
+  // trufflehog allows '_' in xAI keys: xai- + 80 of [A-Za-z0-9_]
+  'xai-api-key': [j('xai', '-', r(80)), j('xai', '-', r(40), '_', r(39))],
   'perplexity-api-key': [j('pplx', '-', r(48))],
-  'replicate-api-token': [j('r8_', r(37))],
+  // Replicate docs: 40 characters starting with r8_; trufflehog allows '-' and '_' in the body
+  'replicate-api-token': [j('r8_', r(37)), j('r8_', r(20), '-', r(8), '_', r(7)), j('r8_', r(36), '-')],
   'langsmith-api-key': [j('lsv2_', 'pt_', hex(32), '_', hex(10)), j('lsv2_', 'sk_', hex(32), '_', hex(10))],
   'email-address': ['jane.doe+tests@example.org'],
   'ipv4-address': ['192.168.10.42'],
