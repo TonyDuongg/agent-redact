@@ -89,7 +89,7 @@ We welcome contributions expanding secret pattern coverage! To add a new pattern
 2. Merge it with a merge commit.
 3. Push an annotated tag `vX.Y.Z` on the merge commit. Two workflows start:
    * `release.yml` checks the version and publishes to npm;
-   * `release-python.yml` builds and tests the Python package, waits until the same version is on npm, and publishes to PyPI through Trusted Publishing (environment `pypi`).
+   * `release-python.yml` builds and tests the Python package, checks that the tagged commit is on `main`, waits until the same version is on npm, and publishes to PyPI through Trusted Publishing (environment `pypi`).
 4. Create the GitHub Release from the `CHANGELOG.md` entry.
 
 `release-python.yml` can also be run manually: the default target is TestPyPI (a dry run). Choosing `pypi` publishes a version that is already tagged, and only from `main` when `python/src` and `pyproject.toml` are unchanged since that tag.

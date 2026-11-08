@@ -2,7 +2,8 @@ name: Release & Publish to PyPI
 
 # Publishes the Python wrapper in python/ with PyPI Trusted Publishing (OIDC, no API token).
 #
-# - Tag push `vX.Y.Z`: build, test, wait for agent-redact@X.Y.Z on npm, publish to PyPI.
+# - Tag push `vX.Y.Z` (on a commit on main): build, test, wait for agent-redact@X.Y.Z on npm,
+#   publish to PyPI.
 # - Manual run, repository=testpypi (default): build, test, publish to TestPyPI (dry run).
 # - Manual run, repository=pypi: publish an already released version from main, e.g. the first
 #   upload of a version whose tag predates this workflow. Allowed only when the tag vX.Y.Z exists
@@ -76,6 +77,11 @@ jobs:
           if [ "$EVENT_NAME" = "push" ]; then
             if [ "$GITHUB_REF" != "refs/tags/v$PY_VERSION" ]; then
               echo "::error::Tag $GITHUB_REF_NAME does not match python/pyproject.toml version v$PY_VERSION"
+              exit 1
+            fi
+            # PyPI versions are immutable: only publish reviewed code, i.e. a tag on main.
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+              echo "::error::Tag $GITHUB_REF_NAME points to $GITHUB_SHA, which is not on main"
               exit 1
             fi
           elif [ "$TARGET" = "pypi" ]; then
