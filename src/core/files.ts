@@ -51,8 +51,16 @@ export function readTextForScan(path: string, maxBytes = DEFAULT_MAX_SCAN_BYTES)
   }
 }
 
-/** Recursively lists regular files below `dir`, skipping excluded directory names and .git */
-export function walkFiles(dir: string, excludeDirs: ReadonlySet<string>, result: string[] = []): string[] {
+/**
+ * Recursively lists regular files below `dir`, skipping excluded directory names and .git.
+ * Files with a known binary extension are skipped unless `includeBinaryExtensions` is set.
+ */
+export function walkFiles(
+  dir: string,
+  excludeDirs: ReadonlySet<string>,
+  result: string[] = [],
+  includeBinaryExtensions = false
+): string[] {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -63,9 +71,9 @@ export function walkFiles(dir: string, excludeDirs: ReadonlySet<string>, result:
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name !== '.git' && !excludeDirs.has(entry.name)) {
-        walkFiles(fullPath, excludeDirs, result);
+        walkFiles(fullPath, excludeDirs, result, includeBinaryExtensions);
       }
-    } else if (entry.isFile() && !hasKnownBinaryExtension(entry.name)) {
+    } else if (entry.isFile() && (includeBinaryExtensions || !hasKnownBinaryExtension(entry.name))) {
       result.push(fullPath);
     }
   }

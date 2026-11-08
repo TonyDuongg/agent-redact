@@ -17,6 +17,7 @@ import { tmpdir, homedir } from 'node:os';
 import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
 import { isBinaryFile, DEFAULT_MAX_SCAN_BYTES } from '../core/files.js';
+import { VERSION } from '../version.js';
 import { DEFAULT_PATTERNS } from '../patterns/index.js';
 
 export interface McpServerOptions {
@@ -151,7 +152,7 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
 
   const server = new McpServer({
     name: 'agent-redact',
-    version: '0.1.5'
+    version: VERSION
   });
 
   // Tool 1: redact_text

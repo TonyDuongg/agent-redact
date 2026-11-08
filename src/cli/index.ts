@@ -1,8 +1,21 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, chmodSync, statSync } from 'node:fs';
+import { relative } from 'node:path';
 import { redact, unmask } from '../core/engine.js';
 import { Vault } from '../core/vault.js';
 import { loadConfig } from '../core/config.js';
+import { readTextForScan } from '../core/files.js';
+import { VERSION } from '../version.js';
+import {
+  runScan,
+  expandTargets,
+  formatReport,
+  formatText,
+  writeScanBaseline,
+  type ScanFormat,
+  type ScanOutcome
+} from './scan.js';
+import { runHook } from './hook.js';
 
 function writeSecureFile(filePath: string, content: string): void {
   writeFileSync(filePath, content, { encoding: 'utf-8', mode: 0o600 });
@@ -29,13 +42,23 @@ const colors = {
 
 function printHelp(): void {
   const helpText = `
-${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v0.1.5${colors.reset}
-${colors.dim}Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents${colors.reset}
+${colors.bold}${colors.cyan}agent-redact${colors.reset} ${colors.gray}v${VERSION}${colors.reset}
+${colors.dim}Secret & PII redactor for AI agents, LLM pipelines and CI${colors.reset}
 
 ${colors.bold}USAGE:${colors.reset}
   npx agent-redact <file> [options]         Redact secrets in a file
   cat log.txt | npx agent-redact [options]  Redact secrets from standard input (stdin)
+  npx agent-redact <dir|files...>           Scan (honours .gitignore in git repos); exit 1 on findings
+  npx agent-redact --staged                 Scan what is staged for commit (git index)
   npx agent-redact mcp                      Start Model Context Protocol (MCP) server
+  npx agent-redact hook [--block-writes]    Claude Code hook (reads hook JSON on stdin)
+
+${colors.bold}SCAN OPTIONS:${colors.reset}
+  --format <text|json|sarif>  Report format (json/sarif go to stdout or --report)
+  --report <file>             Write the json/sarif report to a file
+  --baseline <file>           Ignore findings recorded in a baseline file
+  --write-baseline <file>     Record current findings as accepted, then exit 0
+  Inline: add "agent-redact-ignore" to a line, or "agent-redact-ignore-next-line" above it
 
 ${colors.bold}OPTIONS:${colors.reset}
   -r, --reversible            Generate numbered session placeholders ([ANTHROPIC_API_KEY_1])
@@ -86,17 +109,31 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (args[0] === 'hook') {
+    process.exit(await runHook(args.slice(1)));
+  }
+
   if (args.includes('-h') || args.includes('--help')) {
     printHelp();
     process.exit(0);
   }
 
   if (args.includes('-v') || args.includes('--version')) {
-    console.log('agent-redact v0.1.5');
+    console.log(`agent-redact v${VERSION}`);
     process.exit(0);
   }
 
-  const VALUE_FLAGS = new Set(['-o', '--output', '--vault-out', '--unmask', '--config']);
+  const VALUE_FLAGS = new Set([
+    '-o',
+    '--output',
+    '--vault-out',
+    '--unmask',
+    '--config',
+    '--format',
+    '--report',
+    '--baseline',
+    '--write-baseline'
+  ]);
   const BOOLEAN_FLAGS = new Set([
     '-r',
     '--reversible',
@@ -108,6 +145,7 @@ async function main(): Promise<void> {
     '--entropy',
     '--check',
     '--fail-on-leak',
+    '--staged',
     '-h',
     '--help',
     '-v',
@@ -152,12 +190,31 @@ async function main(): Promise<void> {
   const configIdx = args.indexOf('--config');
   const configPath = configIdx !== -1 && args[configIdx + 1] ? args[configIdx + 1] : undefined;
 
+  const valueAfter = (flag: string): { index: number; value?: string } => {
+    const index = args.indexOf(flag);
+    return { index, value: index !== -1 ? args[index + 1] : undefined };
+  };
+  const formatArg = valueAfter('--format');
+  const reportArg = valueAfter('--report');
+  const baselineArg = valueAfter('--baseline');
+  const writeBaselineArg = valueAfter('--write-baseline');
+  const isStaged = args.includes('--staged');
+
   // Track argument indices that belong to flags with values
   const skipIndices = new Set<number>();
   if (outputIdx !== -1) skipIndices.add(outputIdx + 1);
   if (vaultOutIdx !== -1) skipIndices.add(vaultOutIdx + 1);
   if (unmaskIdx !== -1) skipIndices.add(unmaskIdx + 1);
   if (configIdx !== -1) skipIndices.add(configIdx + 1);
+  for (const a of [formatArg, reportArg, baselineArg, writeBaselineArg]) {
+    if (a.index !== -1) skipIndices.add(a.index + 1);
+  }
+
+  const format = formatArg.value as ScanFormat | undefined;
+  if (format !== undefined && !['text', 'json', 'sarif'].includes(format)) {
+    console.error(`${colors.red}Error:${colors.reset} --format must be one of: text, json, sarif.`);
+    process.exit(2);
+  }
 
   // Load config file if present
   let loadedConfig = null;
@@ -187,24 +244,103 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  // Multi-file screening mode (used by pre-commit or batch audits)
-  if (fileArgs.length > 1) {
-    if (unmaskVaultFile || outputFile || isJson) {
+  const isDirectoryArg = (p: string) => {
+    try {
+      return statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+  const hasDirectory = fileArgs.some(isDirectoryArg);
+  const multiInput = fileArgs.length > 1 || hasDirectory;
+
+  if (multiInput && (unmaskVaultFile || outputFile || isJson)) {
+    console.error(
+      `${colors.red}Error:${colors.reset} Flags -o/--output, --unmask, and -j/--json cannot be used with multiple input files.`
+    );
+    process.exit(2);
+  }
+
+  // Scan mode: audit directories (honouring .gitignore), several files, or the git index, and
+  // report findings without secret values (text on stderr, or JSON/SARIF on stdout/--report)
+  const scanMode =
+    isStaged ||
+    format !== undefined ||
+    baselineArg.index !== -1 ||
+    writeBaselineArg.index !== -1 ||
+    (multiInput && !isInplace);
+  if (scanMode) {
+    if (isInplace || isReversible || outputFile || unmaskVaultFile || isJson) {
       console.error(
-        `${colors.red}Error:${colors.reset} Flags -o/--output, --unmask, and -j/--json cannot be used with multiple input files.`
+        `${colors.red}Error:${colors.reset} -i, -r, -o, --unmask and --json cannot be combined with scan mode ` +
+          '(directories, --staged, --format, --baseline, --write-baseline).'
       );
       process.exit(2);
     }
+    if (!isStaged && fileArgs.length === 0) {
+      console.error(`${colors.red}Error:${colors.reset} scan mode needs at least one file or directory (or --staged).`);
+      process.exit(2);
+    }
+    let outcome: ScanOutcome;
+    try {
+      outcome = runScan({
+        targets: fileArgs,
+        staged: isStaged,
+        baselineFile: writeBaselineArg.index !== -1 ? undefined : baselineArg.value,
+        cwd: process.cwd(),
+        options: {
+          include: loadedConfig?.include,
+          exclude: loadedConfig?.exclude,
+          allowlist: loadedConfig?.allowlist,
+          customPatterns: loadedConfig?.customPatterns,
+          detectHighEntropy: detectEntropy || (loadedConfig?.detectHighEntropy ?? false),
+          entropy: loadedConfig?.entropy
+        }
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`${colors.red}Error:${colors.reset} ${msg}`);
+      process.exit(1);
+    }
 
+    if (writeBaselineArg.value) {
+      writeScanBaseline(writeBaselineArg.value, outcome);
+      console.error(
+        `${colors.green}✔${colors.reset} Baseline with ${outcome.findings.length} finding(s) written to ${writeBaselineArg.value}`
+      );
+      process.exit(0);
+    }
+
+    if (format === 'json' || format === 'sarif') {
+      const report = formatReport(outcome, format);
+      if (reportArg.value) writeFileSync(reportArg.value, report, 'utf-8');
+      else process.stdout.write(report);
+    }
+    console.error(formatText(outcome, colors));
+    process.exit(outcome.findings.length > 0 ? 1 : 0);
+  }
+
+  // Multi-file in-place mode: rewrite every input that contains secrets
+  if (multiInput) {
     let totalLeaksAcrossFiles = 0;
+    let inPlaceFiles: string[];
+    try {
+      inPlaceFiles = expandTargets(fileArgs, process.cwd());
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`${colors.red}Error:${colors.reset} ${msg}`);
+      process.exit(1);
+    }
 
-    // Read every input first so a missing/unreadable file aborts before anything is modified
+    // Read every input first so a missing/unreadable file aborts before anything is modified.
+    // Binary and oversized files expanded from directories are skipped, never rewritten.
     const inputs: Array<{ file: string; content: string }> = [];
-    for (const file of fileArgs) {
-      try {
-        inputs.push({ file, content: readFileSync(file, 'utf-8') });
-      } catch {
-        console.error(`${colors.red}Error:${colors.reset} Cannot read file: ${file}`);
+    for (const file of inPlaceFiles) {
+      const read = readTextForScan(file);
+      if (read.ok) {
+        inputs.push({ file, content: read.content });
+      } else if (read.reason === 'unreadable' || !hasDirectory) {
+        console.error(`${colors.red}Error:${colors.reset} Cannot read file: ${relative(process.cwd(), file) || file}`);
         process.exit(1);
       }
     }
@@ -230,31 +366,24 @@ async function main(): Promise<void> {
     }
 
     for (const { file, res } of results) {
-      if (isInplace && res.hasLeaks) {
-        writeFileSync(file, res.text, 'utf-8');
-      }
-
+      const shown = relative(process.cwd(), file) || file;
       if (res.hasLeaks) {
+        writeFileSync(file, res.text, 'utf-8');
         totalLeaksAcrossFiles += res.totalLeaks;
-        console.error(
-          `${colors.yellow}✖ [LEAK]${colors.reset} ${file}: ${res.totalLeaks} secret(s) detected`
-        );
+        console.error(`${colors.yellow}✖ [LEAK]${colors.reset} ${shown}: ${res.totalLeaks} secret(s) redacted in place`);
       } else {
-        console.error(`${colors.green}✔ [CLEAN]${colors.reset} ${file}`);
+        console.error(`${colors.green}✔ [CLEAN]${colors.reset} ${shown}`);
       }
     }
 
-    if (totalLeaksAcrossFiles > 0 && (failOnLeak || !isInplace)) {
+    if (totalLeaksAcrossFiles > 0 && failOnLeak) {
       console.error(
-        `\n${colors.red}[agent-redact] Audit failed: detected ${totalLeaksAcrossFiles} secret(s) across ${fileArgs.length} files.${colors.reset}`
+        `\n${colors.red}[agent-redact] Audit failed: detected ${totalLeaksAcrossFiles} secret(s) across ${results.length} files.${colors.reset}`
       );
       process.exit(1);
-    } else {
-      console.error(
-        `\n${colors.green}[agent-redact] All ${fileArgs.length} files ${isInplace ? 'sanitized' : 'are clean'}.${colors.reset}`
-      );
-      process.exit(0);
     }
+    console.error(`\n${colors.green}[agent-redact] All ${results.length} files sanitized.${colors.reset}`);
+    process.exit(0);
   }
 
   const fileArg = fileArgs[0];
