@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.2.0] - 2026-11-08
+
+Linear-time scanning, streaming unmask for LLM SDKs, repository scanning with SARIF and baselines, a Claude Code hook, encrypted vaults, Vietnamese PII preset, more AI provider keys and a Python package.
+
+### ⚠️ Upgrade notes (behavior changes)
+- **`wrapAgent`** now deep-unmasks plain-object responses (returning a restored **copy**, not the same reference) and stream-unmasks `async function*` responses. Class instances are still returned untouched.
+- **Tool-call inputs stay masked by default** (`tool_use.input`, `function.arguments`, …) in `unmaskDeep`, the stream adapters and `wrapAgent`. Opt in per tool with `unmaskToolInputs`.
+- **CLI:** passing directories or several files now runs **scan mode**, which reports findings without values and exits 1 when any are found. Scan mode cannot be combined with `-r`, `-o`, `--unmask` or `--json`. Multi-file `-i` only rewrites files that contain secrets.
+- **Email pattern:** RFC 5321 length limits apply (local part ≤ 64, domain ≤ 253, TLD ≤ 63).
+- **npm package:** no longer ships source maps, the GitHub Action bundle or the CJS CLI.
+- **Python package:** requires Python 3.10+.
 
 ### 🔧 Tooling
 - **TypeScript 5.9 → 6.0.3:** `tsconfig.json` now lists `"types": ["node"]` explicitly, because TS 6 no longer auto-includes `@types`. It also sets `ignoreDeprecations: "6.0"`, because tsup's d.ts step passes the deprecated `baseUrl`. TypeScript 7 (native) is not usable yet: tsup's `rollup-plugin-dts` needs the JS compiler API that TS 7 does not ship.
@@ -20,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `scan()` covers paths or the git index.
   - `Session` provides reversible masking across calls. Its vault is encrypted with a random per-session passphrase that never touches disk, and is deleted on close.
 - **CLI discovery** (hardened after automated security review): an absolute `AGENT_REDACT_CLI`, then a global `agent-redact` resolved to its JS entry, then a one-time `npm install --ignore-scripts` of the same version into a private user cache. The CLI is always started as `node <absolute path>`. `.cmd`/`.bat` shims and `npx` are never used, and executables are never taken from the current directory or relative `PATH` entries, so a scanned repository cannot plant a binary or an `.npmrc`. Python 3.10+ (3.9 is EOL and no longer available on CI runners).
-- **CI:** new Python job (Ubuntu and Windows, Python 3.9 and 3.13). A test keeps the Python version in sync with `package.json`.
+- **CI:** new Python job (Ubuntu and Windows, Python 3.10 and 3.13). A test keeps the Python version in sync with `package.json`.
 - **New CLI flags:** `--vault-in <file>` continues an existing (encrypted) vault, so numbering carries over between runs; `--preset <a,b>` enables presets from the command line.
 
 ### 🎯 Detection

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-redact"
-version = "0.1.5"
+version = "0.2.0"
 description = "Secret & PII redaction for Python AI agents (wrapper around the agent-redact CLI)"
 readme = "README.md"
 license = "MIT"
