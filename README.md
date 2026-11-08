@@ -5,7 +5,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/agent-redact.svg?style=flat&color=3776ab)](https://pypi.org/project/agent-redact/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-blue)](package.json)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.18.0-blue)](package.json)
 
 > **Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents, LLMs, and Multi-Agent Workflows.**
 
@@ -25,7 +25,7 @@ Developers and autonomous AI agents (**Claude Code, Cursor, OpenAI, DeepSeek, Go
 * **Dependency-Free Core**: the redaction engine (`import { redact } from 'agent-redact'`) imports no third-party code. The MCP server and CLI use `@modelcontextprotocol/sdk` and `zod`.
 * **Dual-Way Reversible Masking (Vault)**: Masks sensitive tokens into numbered session placeholders (`[ANTHROPIC_API_KEY_1]`) and reliably unmasks them after the LLM completes its reasoning.
 * **Severity-Based Conflict Resolution**: Mathematical arbitration prioritizes high-risk credentials over overlapping low-risk patterns (e.g. GitHub PAT vs. email regex).
-* **CLI & SDK Ready**: Instant CLI utility (`npx agent-redact`) and modern dual ESM/CJS SDK for Node.js 20+.
+* **CLI & SDK Ready**: Instant CLI utility (`npx agent-redact`) and modern dual ESM/CJS SDK for Node.js 22.18+.
 
 ---
 
@@ -433,7 +433,7 @@ The `agent-redact` Python package (source in [`python/`](python/)) wraps the CLI
 pip install agent-redact
 ```
 
-> **Node.js 20+ is still required.** The PyPI package contains only the Python wrapper; the detection engine is the Node.js CLI. It is found via an absolute `AGENT_REDACT_CLI`, a global `npm i -g agent-redact`, or a one-time install of the matching version into a private user cache. It is always started as `node <absolute path>`, never via shims, `npx` or the current directory.
+> **Node.js 22.18+ is still required.** The PyPI package contains only the Python wrapper; the detection engine is the Node.js CLI. It is found via an absolute `AGENT_REDACT_CLI`, a global `npm i -g agent-redact`, or a one-time install of the matching version into a private user cache. It is always started as `node <absolute path>`, never via shims, `npx` or the current directory.
 
 ```python
 from agent_redact import redact, scan, Session
@@ -681,7 +681,7 @@ npm run bench
   * High-performance single-pass regex scanner for 20+ secret categories.
   * Conflict resolution algorithm based on token severity.
   * Interactive CLI with color badges, in-place editing, and file piping.
-  * Dual ESM/CJS build targeting Node.js 20+.
+  * Dual ESM/CJS build targeting Node.js 22.18+ (20+ until 0.2.x).
   * Zero runtime dependencies for core engine.
 * [x] **v1.1 (Reversible Session Vault)**:
   * In-memory Vault with bidirectional placeholder substitution.
@@ -703,7 +703,7 @@ npm run bench
   * `.pre-commit-hooks.yaml` for pre-commit git hooks.
 * [ ] **v1.6 (NPM Public Distribution & Multi-OS CI)**:
   * Official public publishing to npm registry (`npm install agent-redact`).
-  * Cross-platform support (Ubuntu, Windows, macOS) across Node.js 20, 22, and 24.
+  * Cross-platform support (Ubuntu, Windows, macOS) across Node.js 22, 24, and 26.
   * GitHub Release with automated verification and security audit conformance.
 
 ---

@@ -1,3 +1,1 @@
-declare function runAction(): Promise<void>;
-
-export { runAction };
+export declare function runAction(): Promise<void>;

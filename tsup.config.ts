@@ -9,12 +9,12 @@ export default defineConfig({
     'action/index': 'src/action/index.ts'
   },
   format: ['esm', 'cjs'],
-  dts: true,
+  dts: false,
   clean: true,
   sourcemap: true,
   splitting: false,
   treeshake: true,
   minify: false,
-  target: 'node20'
+  target: 'node22'
 });
 

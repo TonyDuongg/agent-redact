@@ -7,7 +7,7 @@ First off, thank you for considering contributing to `agent-redact`! It's people
 ## 🛠️ Development Setup
 
 ### Prerequisites
-* **Node.js**: `v20.0.0` or higher
+* **Node.js**: `v22.18.0` or higher
 * **npm**: `v10.0.0` or higher
 * **git**
 
