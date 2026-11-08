@@ -2,6 +2,12 @@
 
 Python bindings for [agent-redact](https://github.com/TonyDuongg/agent-redact). This is a thin, dependency-free wrapper around the Node.js CLI, so Python agents get exactly the same detection engine as the npm package.
 
+```bash
+pip install agent-redact
+```
+
+> **Node.js 20+ is still required.** This package contains only the Python wrapper; the detection engine is the Node.js CLI (see below for how it is found).
+
 **Requirements:**
 - Python 3.10+
 - Node.js 20+

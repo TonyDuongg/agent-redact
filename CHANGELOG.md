@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### 🐍 Python package
+- **Published on PyPI** as `agent-redact` (`pip install agent-redact`). Node.js 20+ is still required, because the package wraps the Node.js CLI.
+- **New `release-python.yml` workflow** using PyPI Trusted Publishing (OIDC, no API token):
+  - a `vX.Y.Z` tag builds and tests the sdist and wheel, checks that the tag, `pyproject.toml`, `__init__.py` and `package.json` agree and that the tagged commit is on `main`, waits until the same version is on npm (the wrapper installs it from there on first use), and then publishes from the `pypi` environment;
+  - a manual run publishes to TestPyPI by default. Publishing to PyPI manually works only from `main`, for a version whose tag already exists and whose `python/src` and `pyproject.toml` are unchanged since that tag;
+  - only the publish jobs get `id-token: write`, and they run no repository code.
+
+---
+
 ## [0.2.0] - 2026-11-08
 
 Linear-time scanning, streaming unmask for LLM SDKs, repository scanning with SARIF and baselines, a Claude Code hook, encrypted vaults, Vietnamese PII preset, more AI provider keys and a Python package.

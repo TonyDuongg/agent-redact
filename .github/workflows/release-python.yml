@@ -1,0 +1,225 @@
+name: Release & Publish to PyPI
+
+# Publishes the Python wrapper in python/ with PyPI Trusted Publishing (OIDC, no API token).
+#
+# - Tag push `vX.Y.Z` (on a commit on main): build, test, wait for agent-redact@X.Y.Z on npm,
+#   publish to PyPI.
+# - Manual run, repository=testpypi (default): build, test, publish to TestPyPI (dry run).
+# - Manual run, repository=pypi: publish an already released version from main, e.g. the first
+#   upload of a version whose tag predates this workflow. Allowed only when the tag vX.Y.Z exists
+#   and python/src + pyproject.toml are identical to that tag.
+#
+# Only the publish jobs get `id-token: write`, and they run no repository code: they download the
+# built files and hand them to pypa/gh-action-pypi-publish.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: 'Where to publish'
+        type: choice
+        options:
+          - testpypi
+          - pypi
+        default: testpypi
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-python-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build & test Python distributions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # tags and history for the release checks below
+          persist-credentials: false
+
+      - name: Set up Node.js 22.x
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22.x # no dependency cache: release artifacts are built from a clean install
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify release version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET: ${{ inputs.repository }}
+        run: |
+          set -euo pipefail
+          PY_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("python/pyproject.toml", "rb"))["project"]["version"])')"
+          INIT_VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' python/src/agent_redact/__init__.py)"
+          NPM_VERSION="$(node -p "require('./package.json').version")"
+          echo "pyproject.toml=$PY_VERSION __init__.py=$INIT_VERSION package.json=$NPM_VERSION ref=$GITHUB_REF"
+
+          if [ "$PY_VERSION" != "$INIT_VERSION" ] || [ "$PY_VERSION" != "$NPM_VERSION" ]; then
+            echo "::error::Version mismatch: pyproject.toml=$PY_VERSION, __init__.py=$INIT_VERSION, package.json=$NPM_VERSION"
+            exit 1
+          fi
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            if [ "$GITHUB_REF" != "refs/tags/v$PY_VERSION" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match python/pyproject.toml version v$PY_VERSION"
+              exit 1
+            fi
+            # PyPI versions are immutable: only publish reviewed code, i.e. a tag on main.
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+              echo "::error::Tag $GITHUB_REF_NAME points to $GITHUB_SHA, which is not on main"
+              exit 1
+            fi
+          elif [ "$TARGET" = "pypi" ]; then
+            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error::Manual PyPI releases must run on main (got $GITHUB_REF)"
+              exit 1
+            fi
+            if ! git rev-parse -q --verify "refs/tags/v$PY_VERSION" >/dev/null; then
+              echo "::error::Tag v$PY_VERSION does not exist; release it on npm/GitHub first"
+              exit 1
+            fi
+            if ! git diff --quiet "v$PY_VERSION" HEAD -- python/src python/pyproject.toml; then
+              echo "::error::python/src or pyproject.toml changed since v$PY_VERSION; bump the version and tag a new release instead"
+              git diff --stat "v$PY_VERSION" HEAD -- python/src python/pyproject.toml
+              exit 1
+            fi
+          elif [ "$TARGET" != "testpypi" ]; then
+            echo "::error::Unknown repository input: $TARGET"
+            exit 1
+          fi
+
+          echo "version=$PY_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build the CLI used by the Python tests
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run Python tests
+        working-directory: python
+        run: |
+          python -m pip install --upgrade pip pytest
+          python -m pytest -q
+
+      - name: Build sdist and wheel
+        working-directory: python
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Check built files
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -l python/dist
+          test "$(ls python/dist | wc -l)" -eq 2
+          test -f "python/dist/agent_redact-$VERSION-py3-none-any.whl"
+          test -f "python/dist/agent_redact-$VERSION.tar.gz"
+
+          # Install the wheel into a clean venv and run it from outside the repository,
+          # so the import cannot pick up python/src by accident.
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip install --no-deps "python/dist/agent_redact-$VERSION-py3-none-any.whl"
+          cd "$RUNNER_TEMP"
+          AGENT_REDACT_CLI="$GITHUB_WORKSPACE/dist/cli/index.js" "$RUNNER_TEMP/wheel-venv/bin/python" - <<'EOF'
+          import os
+          import agent_redact
+          assert agent_redact.__version__ == os.environ["VERSION"], agent_redact.__version__
+          assert "site-packages" in agent_redact.__file__, agent_redact.__file__
+          key = "AKIA" + "IOSFODNN7EXAMPLE"  # assembled at runtime, never verbatim in the repo
+          result = agent_redact.redact(f"key {key} end")
+          assert result.text == "key [REDACTED_AWS_ACCESS_KEY_ID] end", result.text
+          print("wheel OK:", agent_redact.__file__)
+          EOF
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-dist
+          path: python/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  npm-ready:
+    # The wrapper installs agent-redact@<its own version> from npm when no CLI is found, so a PyPI
+    # release must not go out before the matching npm release (published by release.yml).
+    name: Wait for the matching npm release
+    needs: build
+    if: github.event_name == 'push' || inputs.repository == 'pypi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Wait for agent-redact@${{ needs.build.outputs.version }} on npm
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          for attempt in $(seq 1 40); do
+            if curl -fsS -o /dev/null "https://registry.npmjs.org/agent-redact/$VERSION"; then
+              echo "agent-redact@$VERSION is on npm"
+              exit 0
+            fi
+            echo "Attempt $attempt: agent-redact@$VERSION not on npm yet, retrying in 30s"
+            sleep 30
+          done
+          echo "::error::agent-redact@$VERSION is not on npm after 20 minutes; not publishing to PyPI"
+          exit 1
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build, npm-ready]
+    if: github.event_name == 'push' || inputs.repository == 'pypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/agent-redact/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write # Trusted Publishing; nothing else
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.repository == 'testpypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/agent-redact/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write # Trusted Publishing; nothing else
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # TestPyPI is a dry run: re-running for a version that is already there is not an error.
+          skip-existing: true
