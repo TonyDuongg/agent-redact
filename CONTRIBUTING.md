@@ -64,6 +64,22 @@ We welcome contributions expanding secret pattern coverage! To add a new pattern
    * Verify negative matches (no false positives on normal text).
 5. Ensure all tests pass (`npm test`) and type checking passes (`npm run typecheck`).
 
+### Checking AI provider patterns with real keys
+
+`scripts/verify-provider-keys.mjs` runs the built patterns (`npm run build` first) against **real** keys taken from environment variables, and prints only `provider: PASS/FAIL/SKIPPED`. Never paste real keys into issues, PRs or chats, and never commit them.
+
+```powershell
+# PowerShell: take the key from the clipboard so it never lands in shell history
+$env:GROQ_KEY = Get-Clipboard; node scripts/verify-provider-keys.mjs --explain; Remove-Item Env:GROQ_KEY
+```
+
+```bash
+# bash / zsh: read the key without echoing it
+read -rs GROQ_KEY && export GROQ_KEY && node scripts/verify-provider-keys.mjs --explain; unset GROQ_KEY
+```
+
+Variables: `OPENROUTER_KEY`, `GROQ_KEY`, `XAI_KEY`, `PERPLEXITY_KEY`, `REPLICATE_KEY`, `HF_ORG_KEY`, `LANGSMITH_KEY` (the usual SDK names such as `GROQ_API_KEY` work too). `--explain` adds non-secret hints to failures: the reason, the length, and which character classes occur.
+
 ---
 
 ## 📐 Coding Conventions
