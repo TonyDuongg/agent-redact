@@ -29,7 +29,7 @@ declare class Vault {
      * for the given secret token. Optionally ensures placeholder does not collide
      * with literal text already in the document.
      */
-    getOrCreate(original: string, pattern: RedactPattern, existingText?: string): string;
+    getOrCreate(original: string, pattern: RedactPattern, existingText?: string | ReadonlySet<string>): string;
     /**
      * Retrieves original secret from placeholder.
      */
