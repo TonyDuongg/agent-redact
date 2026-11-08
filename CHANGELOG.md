@@ -9,8 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠️ Upgrade notes (behavior changes)
+- **Node.js 22.18 or newer is required** (`engines.node: ">=22.18.0"`). Node.js 20 reached end-of-life in April 2026, and the build toolchain no longer runs on it (Vitest 5 needs ≥ 22.12, tsup 9 needs ≥ 22.18). The code does not use Node 22-only APIs, but Node 20 is no longer tested or supported. This also applies to the Python package, which runs the Node.js CLI.
+- **Type declarations are no longer bundled.** `dist/` now ships one `.d.ts` per source file, emitted by `tsc`, and no longer ships the `.d.cts` copies. The `exports` map already pointed `types` at the `.d.ts` files, and the public API is unchanged: a compiler-API dump of all 149 exports and their members is identical. ESM and CJS consumers type-check against the new package with TypeScript 5.9 and 7.0, with `skipLibCheck: false`.
+
+### 🔧 Tooling
+- **CI matrix:** Node.js 22, 24 and 26 (was 20, 22, 24). The secret-scan workflow moved from Node 20 to 22.
+- **Vitest 4.1 → 5.1, tsup 8 → 9.** The esbuild `overrides` entry is gone, because tsup 9 depends on esbuild ^0.28.2 itself (`npm audit`: 0 vulnerabilities). Build target `node20` → `node22`, which changes no emitted JavaScript.
+- **TypeScript 6.0 → 7.0 (native compiler)** for type checking and declaration emit. tsup 9 still cannot emit declarations with TS 7, because its bundled `rollup-plugin-dts` needs the JavaScript compiler API that TS 7 does not ship. Declarations are therefore emitted by `tsc -p tsconfig.build.json` (`emitDeclarationOnly`) after tsup builds the JavaScript, and tsup's `dts` is off. `ignoreDeprecations: "6.0"` is removed: it was only needed for the `baseUrl` that tsup's old d.ts step passed.
+- Timing-based performance tests keep their thresholds: on Vitest 5 the slowest runs are 4–22× below them.
+- New `tests/node-support.test.ts` keeps `engines`, every workflow's Node version, the build target and the docs on the same minimum version.
+
 ### 🐍 Python package
-- **Published on PyPI** as `agent-redact` (`pip install agent-redact`). Node.js 20+ is still required, because the package wraps the Node.js CLI.
+- **On PyPI** as `agent-redact` (`pip install agent-redact`). The new workflow published 0.2.0 there on 2026-11-08. Node.js is still required (22.18+ from this release), because the package wraps the Node.js CLI.
 - **New `release-python.yml` workflow** using PyPI Trusted Publishing (OIDC, no API token):
   - a `vX.Y.Z` tag builds and tests the sdist and wheel, checks that the tag, `pyproject.toml`, `__init__.py` and `package.json` agree and that the tagged commit is on `main`, waits until the same version is on npm (the wrapper installs it from there on first use), and then publishes from the `pypi` environment;
   - a manual run publishes to TestPyPI by default. Publishing to PyPI manually works only from `main`, for a version whose tag already exists and whose `python/src` and `pyproject.toml` are unchanged since that tag;
@@ -21,8 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **xAI:** the key body may contain `_` (`xai-` + `[A-Za-z0-9_]`). Before, a key with `_` was not detected at all.
   - **Replicate:** the token body may contain `-` and `_` (`r8_` + `[A-Za-z0-9_-]`; the docs give 40 characters in total). Before, a `_` hid the whole token, and a `-` after the first 30 characters left the rest of the token unmasked.
 - Each trailing lookahead now excludes the pattern's full character set, so a key is never matched only in part. Lengths remain lower bounds.
-
-### 🔧 Tooling
 - **`scripts/verify-provider-keys.mjs`:** checks real provider keys against the built `dist/`, reading them from environment variables only (`OPENROUTER_KEY`, `GROQ_KEY`, `XAI_KEY`, `PERPLEXITY_KEY`, `REPLICATE_KEY`, `HF_ORG_KEY`, `LANGSMITH_KEY`, plus the usual SDK names). Each key must be found with its full span in `.env`, JSON, prose and `Authorization` header contexts. The output is only `provider: PASS/FAIL/SKIPPED`; `--explain` adds non-secret hints (reason, length, character classes). Keys are never printed.
 
 ---

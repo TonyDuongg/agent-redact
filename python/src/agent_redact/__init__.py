@@ -2,7 +2,7 @@
 
 This package is a thin, dependency-free wrapper around the agent-redact Node.js CLI, so
 Python agents (LangChain, CrewAI, AutoGen, plain SDK code) get exactly the same detection
-engine as the npm package. It needs Node.js 20+ and one of:
+engine as the npm package. It needs Node.js 22.18+ and one of:
 
 * ``AGENT_REDACT_CLI`` set to the absolute path of ``dist/cli/index.js`` (or an executable),
 * a global ``npm install -g agent-redact``, or
@@ -88,7 +88,7 @@ class Finding:
 
 
 _NOT_FOUND = (
-    "agent-redact CLI not found. Install Node.js 20+ and run `npm install -g agent-redact`, "
+    "agent-redact CLI not found. Install Node.js 22.18+ and run `npm install -g agent-redact`, "
     "or set AGENT_REDACT_CLI to the absolute path of dist/cli/index.js."
 )
 
@@ -113,7 +113,7 @@ def _safe_which(name: str) -> str | None:
 def _node() -> str:
     node = _safe_which("node")
     if not node:
-        raise AgentRedactError("`node` (Node.js 20+) was not found on PATH. " + _NOT_FOUND)
+        raise AgentRedactError("`node` (Node.js 22.18+) was not found on PATH. " + _NOT_FOUND)
     return node
 
 
