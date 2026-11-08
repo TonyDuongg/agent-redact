@@ -347,6 +347,8 @@ export const mailgunApiKeyPattern: RedactPattern = {
 /*
  * AI / LLM provider keys commonly handled by agents. Length quantifiers are lower bounds
  * (not exact lengths) so a provider lengthening its keys does not silently stop detection.
+ * Character classes use the widest set accepted by public scanners (trufflehog, gitleaks), and
+ * each trailing lookahead excludes that same set, so a key is never matched only in part.
  */
 
 export const openrouterApiKeyPattern: RedactPattern = {
@@ -374,7 +376,7 @@ export const xaiApiKeyPattern: RedactPattern = {
   name: 'xAI API Key',
   category: 'credential',
   severity: 'critical',
-  regex: /\bxai-[A-Za-z0-9]{60,}(?![A-Za-z0-9_])/g,
+  regex: /\bxai-[A-Za-z0-9_]{60,}(?![A-Za-z0-9_])/g,
   placeholder: 'XAI_API_KEY',
   description: 'xAI (Grok) API key (xai-...)'
 };
@@ -394,7 +396,7 @@ export const replicateApiTokenPattern: RedactPattern = {
   name: 'Replicate API Token',
   category: 'credential',
   severity: 'critical',
-  regex: /\br8_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  regex: /\br8_[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])/g,
   placeholder: 'REPLICATE_API_TOKEN',
   description: 'Replicate API token (r8_...)'
 };

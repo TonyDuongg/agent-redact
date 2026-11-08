@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a manual run publishes to TestPyPI by default. Publishing to PyPI manually works only from `main`, for a version whose tag already exists and whose `python/src` and `pyproject.toml` are unchanged since that tag;
   - only the publish jobs get `id-token: write`, and they run no repository code.
 
+### 🎯 Detection
+- **AI provider keys checked against public scanners** (trufflehog, gitleaks) and vendor docs. OpenRouter, Groq, Perplexity, Hugging Face org and LangSmith already matched. Two patterns were too narrow and **missed keys completely** (fail open):
+  - **xAI:** the key body may contain `_` (`xai-` + `[A-Za-z0-9_]`). Before, a key with `_` was not detected at all.
+  - **Replicate:** the token body may contain `-` and `_` (`r8_` + `[A-Za-z0-9_-]`; the docs give 40 characters in total). Before, a `_` hid the whole token, and a `-` after the first 30 characters left the rest of the token unmasked.
+- Each trailing lookahead now excludes the pattern's full character set, so a key is never matched only in part. Lengths remain lower bounds.
+
+### 🔧 Tooling
+- **`scripts/verify-provider-keys.mjs`:** checks real provider keys against the built `dist/`, reading them from environment variables only (`OPENROUTER_KEY`, `GROQ_KEY`, `XAI_KEY`, `PERPLEXITY_KEY`, `REPLICATE_KEY`, `HF_ORG_KEY`, `LANGSMITH_KEY`, plus the usual SDK names). Each key must be found with its full span in `.env`, JSON, prose and `Authorization` header contexts. The output is only `provider: PASS/FAIL/SKIPPED`; `--explain` adds non-secret hints (reason, length, character classes). Keys are never printed.
+
 ---
 
 ## [0.2.0] - 2026-11-08

@@ -256,7 +256,7 @@ var xaiApiKeyPattern = {
   name: "xAI API Key",
   category: "credential",
   severity: "critical",
-  regex: /\bxai-[A-Za-z0-9]{60,}(?![A-Za-z0-9_])/g,
+  regex: /\bxai-[A-Za-z0-9_]{60,}(?![A-Za-z0-9_])/g,
   placeholder: "XAI_API_KEY",
   description: "xAI (Grok) API key (xai-...)"
 };
@@ -274,7 +274,7 @@ var replicateApiTokenPattern = {
   name: "Replicate API Token",
   category: "credential",
   severity: "critical",
-  regex: /\br8_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  regex: /\br8_[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])/g,
   placeholder: "REPLICATE_API_TOKEN",
   description: "Replicate API token (r8_...)"
 };
