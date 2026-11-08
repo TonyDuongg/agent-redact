@@ -477,8 +477,30 @@ var init_vault = __esm({
       maxEntries;
       /** Names (never values) of placeholders dropped by the size cap, oldest first */
       evictedPlaceholders = /* @__PURE__ */ new Set();
+      /** Bumped on every change to the placeholder set; invalidates the cached unmask regex */
+      mutations = 0;
+      unmaskRegexCache;
       constructor(options) {
         this.maxEntries = options?.maxEntries;
+      }
+      /**
+       * True when `prefix` is the beginning of at least one known placeholder.
+       * Used by streaming unmaskers to decide whether a chunk tail must be held back.
+       */
+      hasPlaceholderPrefix(prefix) {
+        for (const placeholder of this.placeholderToEntries.keys()) {
+          if (placeholder.startsWith(prefix)) return true;
+        }
+        return false;
+      }
+      getUnmaskRegex() {
+        if (this.unmaskRegexCache?.mutations !== this.mutations) {
+          const escaped = Array.from(this.placeholderToEntries.keys()).sort((a, b) => b.length - a.length).map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+          this.unmaskRegexCache = { mutations: this.mutations, regex: new RegExp(escaped.join("|"), "g") };
+        }
+        const { regex } = this.unmaskRegexCache;
+        regex.lastIndex = 0;
+        return regex;
       }
       evictOldestIfNeeded() {
         if (this.maxEntries && this.originalToPlaceholder.size >= this.maxEntries) {
@@ -491,6 +513,7 @@ var init_vault = __esm({
             }
             this.placeholderToEntry.delete(oldestPlaceholder);
             this.placeholderToEntries.delete(oldestPlaceholder);
+            this.mutations++;
             this.rememberEvicted(oldestPlaceholder);
           }
         }
@@ -543,6 +566,7 @@ var init_vault = __esm({
         this.placeholderToEntry.set(placeholder, entry);
         this.placeholderToEntries.set(placeholder, [entry]);
         this.originalToPlaceholder.set(original, placeholder);
+        this.mutations++;
         return placeholder;
       }
       /**
@@ -555,29 +579,29 @@ var init_vault = __esm({
        * Replaces all placeholders in a string back with their original secrets
        * in a deterministic, collision-free single regex pass. Handles multiple
        * secrets mapped to identical custom placeholders sequentially.
+       *
+       * @param encode Optional transform applied to each restored secret, e.g. JSON string
+       *   escaping when the placeholder sits inside a JSON document.
        */
-      unmask(text) {
+      unmask(text, encode) {
         if (this.placeholderToEntries.size === 0 || !text) {
           return text;
         }
-        const placeholders = Array.from(this.placeholderToEntries.keys()).sort(
-          (a, b) => b.length - a.length
-        );
-        const escaped = placeholders.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-        const regex = new RegExp(escaped.join("|"), "g");
+        const regex = this.getUnmaskRegex();
         const occurrences = /* @__PURE__ */ new Map();
+        const out = (secret) => encode ? encode(secret) : secret;
         return text.replace(regex, (matched) => {
           const list = this.placeholderToEntries.get(matched);
           if (!list || list.length === 0) {
             return matched;
           }
           if (list.length === 1) {
-            return list[0].original;
+            return out(list[0].original);
           }
           const idx = occurrences.get(matched) ?? 0;
           occurrences.set(matched, idx + 1);
           const entry = list[idx % list.length];
-          return entry.original;
+          return out(entry.original);
         });
       }
       /**
@@ -594,6 +618,7 @@ var init_vault = __esm({
         }
         this.placeholderToEntries.set(entry.placeholder, existingList);
         this.originalToPlaceholder.set(entry.original, entry.placeholder);
+        this.mutations++;
         const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
         if (match && match[1] && match[2]) {
           const prefix = match[1];
@@ -663,6 +688,7 @@ var init_vault = __esm({
         this.originalToPlaceholder.clear();
         this.counters.clear();
         this.evictedPlaceholders.clear();
+        this.mutations++;
       }
     };
   }

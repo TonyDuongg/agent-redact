@@ -440,8 +440,30 @@ var Vault = class _Vault {
   maxEntries;
   /** Names (never values) of placeholders dropped by the size cap, oldest first */
   evictedPlaceholders = /* @__PURE__ */ new Set();
+  /** Bumped on every change to the placeholder set; invalidates the cached unmask regex */
+  mutations = 0;
+  unmaskRegexCache;
   constructor(options) {
     this.maxEntries = options?.maxEntries;
+  }
+  /**
+   * True when `prefix` is the beginning of at least one known placeholder.
+   * Used by streaming unmaskers to decide whether a chunk tail must be held back.
+   */
+  hasPlaceholderPrefix(prefix) {
+    for (const placeholder of this.placeholderToEntries.keys()) {
+      if (placeholder.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+  getUnmaskRegex() {
+    if (this.unmaskRegexCache?.mutations !== this.mutations) {
+      const escaped = Array.from(this.placeholderToEntries.keys()).sort((a, b) => b.length - a.length).map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+      this.unmaskRegexCache = { mutations: this.mutations, regex: new RegExp(escaped.join("|"), "g") };
+    }
+    const { regex } = this.unmaskRegexCache;
+    regex.lastIndex = 0;
+    return regex;
   }
   evictOldestIfNeeded() {
     if (this.maxEntries && this.originalToPlaceholder.size >= this.maxEntries) {
@@ -454,6 +476,7 @@ var Vault = class _Vault {
         }
         this.placeholderToEntry.delete(oldestPlaceholder);
         this.placeholderToEntries.delete(oldestPlaceholder);
+        this.mutations++;
         this.rememberEvicted(oldestPlaceholder);
       }
     }
@@ -506,6 +529,7 @@ var Vault = class _Vault {
     this.placeholderToEntry.set(placeholder, entry);
     this.placeholderToEntries.set(placeholder, [entry]);
     this.originalToPlaceholder.set(original, placeholder);
+    this.mutations++;
     return placeholder;
   }
   /**
@@ -518,29 +542,29 @@ var Vault = class _Vault {
    * Replaces all placeholders in a string back with their original secrets
    * in a deterministic, collision-free single regex pass. Handles multiple
    * secrets mapped to identical custom placeholders sequentially.
+   *
+   * @param encode Optional transform applied to each restored secret, e.g. JSON string
+   *   escaping when the placeholder sits inside a JSON document.
    */
-  unmask(text) {
+  unmask(text, encode) {
     if (this.placeholderToEntries.size === 0 || !text) {
       return text;
     }
-    const placeholders = Array.from(this.placeholderToEntries.keys()).sort(
-      (a, b) => b.length - a.length
-    );
-    const escaped = placeholders.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    const regex = new RegExp(escaped.join("|"), "g");
+    const regex = this.getUnmaskRegex();
     const occurrences = /* @__PURE__ */ new Map();
+    const out = (secret) => encode ? encode(secret) : secret;
     return text.replace(regex, (matched) => {
       const list = this.placeholderToEntries.get(matched);
       if (!list || list.length === 0) {
         return matched;
       }
       if (list.length === 1) {
-        return list[0].original;
+        return out(list[0].original);
       }
       const idx = occurrences.get(matched) ?? 0;
       occurrences.set(matched, idx + 1);
       const entry = list[idx % list.length];
-      return entry.original;
+      return out(entry.original);
     });
   }
   /**
@@ -557,6 +581,7 @@ var Vault = class _Vault {
     }
     this.placeholderToEntries.set(entry.placeholder, existingList);
     this.originalToPlaceholder.set(entry.original, entry.placeholder);
+    this.mutations++;
     const match = entry.placeholder.match(/^\[(.*)_(\d+)\]$/);
     if (match && match[1] && match[2]) {
       const prefix = match[1];
@@ -626,6 +651,7 @@ var Vault = class _Vault {
     this.originalToPlaceholder.clear();
     this.counters.clear();
     this.evictedPlaceholders.clear();
+    this.mutations++;
   }
 };
 
@@ -945,6 +971,312 @@ var RedactTransformStream = class extends stream.Transform {
 function createRedactStream(options) {
   return new RedactTransformStream(options);
 }
+
+// src/core/deep.ts
+var isPlainObject = (v) => {
+  if (typeof v !== "object" || v === null) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+};
+function isToolUnmaskAllowed(policy, toolName) {
+  if (policy === true) return true;
+  if (typeof policy === "function") return policy(toolName);
+  return false;
+}
+var nameOf = (parent) => {
+  for (const k of ["name", "toolName", "tool_name"]) {
+    if (typeof parent[k] === "string") return parent[k];
+  }
+  return "";
+};
+function toolInputSlot(key, parent) {
+  const type = typeof parent["type"] === "string" ? parent["type"] : "";
+  if (key === "arguments" || key === "args" || key === "partial_json") return nameOf(parent);
+  if ((key === "input" || key === "parameters") && (/tool|function/i.test(type) || "toolName" in parent)) {
+    return nameOf(parent);
+  }
+  if (key === "delta" && /function_call_arguments/i.test(type)) return "";
+  return null;
+}
+var BASE64_RE = /^[A-Za-z0-9+/_-]*={0,2}$/;
+var TEXT_MIME_RE = /^(?:text\/|application\/(?:json|xml|yaml|x-yaml|toml|x-toml|javascript|ecmascript|x-sh|x-shellscript|sql|csv|x-ndjson)\b)|\+(?:json|xml)\b/i;
+function findBase64Payload(value, key, parent) {
+  const dataUrl = /^data:([^;,]*)((?:;[^;,]*)*);base64,/i.exec(value.slice(0, 512));
+  if (dataUrl) {
+    const head = dataUrl[0];
+    return { mime: dataUrl[1] || void 0, encoded: value.slice(head.length), rebuild: (e) => head + e };
+  }
+  if (key === "data" && parent && (parent["type"] === "base64" || "media_type" in parent || "mime_type" in parent)) {
+    const mime = parent["media_type"] ?? parent["mime_type"];
+    return { mime: typeof mime === "string" ? mime : void 0, encoded: value, rebuild: (e) => e };
+  }
+  return null;
+}
+function mapStrings(value, fn, skipProp, seen = /* @__PURE__ */ new WeakMap(), key, parent) {
+  if (typeof value === "string") return fn(value, key, parent);
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return seen.get(value);
+    const out = [];
+    seen.set(value, out);
+    for (const item of value) out.push(mapStrings(item, fn, skipProp, seen, key, parent));
+    return out;
+  }
+  if (isPlainObject(value)) {
+    if (seen.has(value)) return seen.get(value);
+    const out = {};
+    seen.set(value, out);
+    for (const [k, v] of Object.entries(value)) {
+      const decision = skipProp(k, value);
+      out[k] = decision === "skip" ? v : mapStrings(v, fn, decision === "all" ? () => void 0 : skipProp, seen, k, value);
+    }
+    return out;
+  }
+  return value;
+}
+function redactDeep(value, options = {}) {
+  const { vault = new Vault(), skipKeys = [], ...redactOptions } = options;
+  const reversible = redactOptions.reversible ?? true;
+  const skip = new Set(skipKeys);
+  const stats = {};
+  let totalLeaks = 0;
+  const scan = (s) => {
+    const res = redact(s, { ...redactOptions, reversible, vault });
+    totalLeaks += res.totalLeaks;
+    for (const [id, n] of Object.entries(res.stats)) stats[id] = (stats[id] ?? 0) + n;
+    return res.text;
+  };
+  const out = mapStrings(
+    value,
+    (s, key, parent) => {
+      const payload = findBase64Payload(s, key, parent);
+      if (payload) {
+        const compact = payload.encoded.replace(/\r?\n/g, "");
+        if (BASE64_RE.test(compact)) {
+          const bytes = Buffer.from(compact, "base64");
+          const textual = payload.mime !== void 0 && TEXT_MIME_RE.test(payload.mime) || !bytes.includes(0);
+          if (!textual) return s;
+          const decoded = bytes.toString("utf8");
+          const redacted = scan(decoded);
+          return redacted === decoded ? s : payload.rebuild(Buffer.from(redacted, "utf8").toString("base64"));
+        }
+      }
+      return scan(s);
+    },
+    (k) => skip.has(k) ? "skip" : void 0
+  );
+  return { value: out, vault, totalLeaks, stats };
+}
+function unmaskDeep(value, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
+  return mapStrings(
+    value,
+    (s) => vault.unmask(s),
+    (k, parent) => {
+      const tool = toolInputSlot(k, parent);
+      if (tool === null) return void 0;
+      return isToolUnmaskAllowed(policy, tool) ? "all" : "skip";
+    }
+  );
+}
+
+// src/core/unmask-stream.ts
+var jsonStringEscape = (secret) => JSON.stringify(secret).slice(1, -1);
+var StreamingUnmasker = class {
+  constructor(vault, encode) {
+    this.vault = vault;
+    this.encode = encode;
+  }
+  vault;
+  encode;
+  pending = "";
+  /** Feeds the next chunk and returns the text that is safe to emit now */
+  push(chunk) {
+    const text = this.pending + chunk;
+    this.pending = "";
+    const hold = this.holdStart(text);
+    if (hold === -1) {
+      return this.vault.unmask(text, this.encode);
+    }
+    this.pending = text.slice(hold);
+    return this.vault.unmask(text.slice(0, hold), this.encode);
+  }
+  /** Returns everything still buffered (call once the stream has ended) */
+  flush() {
+    const rest = this.pending;
+    this.pending = "";
+    return this.vault.unmask(rest, this.encode);
+  }
+  holdStart(text) {
+    const open = text.lastIndexOf("[");
+    if (open === -1) return -1;
+    const tail = text.slice(open);
+    if (tail.includes("]")) return -1;
+    return this.vault.hasPlaceholderPrefix(tail) ? open : -1;
+  }
+};
+async function* unmaskTextStream(source, vault) {
+  const unmasker = new StreamingUnmasker(vault);
+  for await (const chunk of source) {
+    const out = unmasker.push(String(chunk));
+    if (out) yield out;
+  }
+  const rest = unmasker.flush();
+  if (rest) yield rest;
+}
+var UnmaskTransformStream = class extends stream.Transform {
+  decoder = new string_decoder.StringDecoder("utf8");
+  unmasker;
+  constructor(vault) {
+    super();
+    this.unmasker = new StreamingUnmasker(vault);
+  }
+  _transform(chunk, _enc, callback) {
+    const text = typeof chunk === "string" ? chunk : this.decoder.write(chunk);
+    const out = this.unmasker.push(text);
+    if (out) this.push(out);
+    callback();
+  }
+  _flush(callback) {
+    const rest = this.unmasker.push(this.decoder.end()) + this.unmasker.flush();
+    if (rest) this.push(rest);
+    callback();
+  }
+};
+function createUnmaskStream(vault) {
+  return new UnmaskTransformStream(vault);
+}
+var ANTHROPIC_ENVELOPE_EVENTS = /* @__PURE__ */ new Set([
+  "message_start",
+  "content_block_start",
+  "content_block_stop",
+  "message_delta",
+  "message_stop",
+  "ping"
+]);
+var isObject = (v) => typeof v === "object" && v !== null;
+function getOrCreate(map, key, create) {
+  let value = map.get(key);
+  if (value === void 0) {
+    value = create();
+    map.set(key, value);
+  }
+  return value;
+}
+async function* unmaskAnthropicStream(events, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
+  const text = /* @__PURE__ */ new Map();
+  const json = /* @__PURE__ */ new Map();
+  const toolNames = /* @__PURE__ */ new Map();
+  function* flushBlock(index) {
+    const t = text.get(index)?.flush();
+    if (t) yield { type: "content_block_delta", index, delta: { type: "text_delta", text: t } };
+    const j = json.get(index)?.flush();
+    if (j) yield { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: j } };
+    text.delete(index);
+    json.delete(index);
+  }
+  for await (const event of events) {
+    const e = event;
+    if (isObject(e) && e["type"] === "content_block_start" && isObject(e["content_block"])) {
+      const block = e["content_block"];
+      if (block["type"] === "tool_use") toolNames.set(Number(e["index"] ?? 0), String(block["name"] ?? ""));
+    }
+    if (isObject(e) && e["type"] === "content_block_delta" && isObject(e["delta"])) {
+      const index = Number(e["index"] ?? 0);
+      const delta = e["delta"];
+      if (delta["type"] === "text_delta" && typeof delta["text"] === "string") {
+        const out = getOrCreate(text, index, () => new StreamingUnmasker(vault)).push(delta["text"]);
+        yield { ...e, delta: { ...delta, text: out } };
+        continue;
+      }
+      if (delta["type"] === "input_json_delta" && typeof delta["partial_json"] === "string") {
+        if (!isToolUnmaskAllowed(policy, toolNames.get(index) ?? "")) {
+          yield { ...e, delta: { ...delta } };
+          continue;
+        }
+        const out = getOrCreate(json, index, () => new StreamingUnmasker(vault, jsonStringEscape)).push(
+          delta["partial_json"]
+        );
+        yield { ...e, delta: { ...delta, partial_json: out } };
+        continue;
+      }
+    }
+    if (isObject(e) && e["type"] === "content_block_stop") {
+      yield* flushBlock(Number(e["index"] ?? 0));
+    }
+    if (isObject(e) && e["type"] === "message_stop") {
+      for (const index of /* @__PURE__ */ new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
+    }
+    if (isObject(e) && typeof e["type"] === "string" && ANTHROPIC_ENVELOPE_EVENTS.has(e["type"])) {
+      yield unmaskDeep(event, vault, { unmaskToolInputs: policy });
+    } else {
+      yield event;
+    }
+  }
+  for (const index of /* @__PURE__ */ new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
+}
+async function* unmaskOpenAIStream(chunks, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
+  const content = /* @__PURE__ */ new Map();
+  const args = /* @__PURE__ */ new Map();
+  const toolNames = /* @__PURE__ */ new Map();
+  for await (const chunk of chunks) {
+    const c = chunk;
+    if (!isObject(c) || !Array.isArray(c["choices"])) {
+      yield chunk;
+      continue;
+    }
+    const choices = c["choices"].map((choice) => {
+      if (!isObject(choice) || !isObject(choice["delta"])) return choice;
+      const index = Number(choice["index"] ?? 0);
+      const delta = { ...choice["delta"] };
+      const finished = choice["finish_reason"] != null;
+      if (typeof delta["content"] === "string" || finished && content.has(index)) {
+        const u = getOrCreate(content, index, () => new StreamingUnmasker(vault));
+        let out = typeof delta["content"] === "string" ? u.push(delta["content"]) : "";
+        if (finished) out += u.flush();
+        if (typeof delta["content"] === "string" || out) delta["content"] = out;
+      }
+      const toolCalls = Array.isArray(delta["tool_calls"]) ? [...delta["tool_calls"]] : [];
+      const mapped = toolCalls.map((tc) => {
+        if (!isObject(tc) || !isObject(tc["function"]) || typeof tc["function"]["arguments"] !== "string") {
+          return tc;
+        }
+        const key = `${index}:${Number(tc["index"] ?? 0)}`;
+        if (typeof tc["function"]["name"] === "string") toolNames.set(key, tc["function"]["name"]);
+        if (!isToolUnmaskAllowed(policy, toolNames.get(key) ?? "")) {
+          return { ...tc, function: { ...tc["function"] } };
+        }
+        const u = getOrCreate(args, key, () => new StreamingUnmasker(vault, jsonStringEscape));
+        return { ...tc, function: { ...tc["function"], arguments: u.push(tc["function"]["arguments"]) } };
+      });
+      if (finished) {
+        for (const [key, u] of args) {
+          if (!key.startsWith(`${index}:`)) continue;
+          const rest = u.flush();
+          if (rest) mapped.push({ index: Number(key.split(":")[1]), function: { arguments: rest } });
+          args.delete(key);
+        }
+        content.delete(index);
+      }
+      if (mapped.length > 0) delta["tool_calls"] = mapped;
+      return { ...choice, delta };
+    });
+    yield { ...c, choices };
+  }
+  const trailing = [];
+  for (const [index, u] of content) {
+    const rest = u.flush();
+    if (rest) trailing.push({ index, delta: { content: rest }, finish_reason: null });
+  }
+  for (const [key, u] of args) {
+    const rest = u.flush();
+    if (!rest) continue;
+    const [choiceIndex, toolIndex] = key.split(":").map(Number);
+    trailing.push({ index: choiceIndex, delta: { tool_calls: [{ index: toolIndex, function: { arguments: rest } }] }, finish_reason: null });
+  }
+  if (trailing.length > 0) yield { choices: trailing };
+}
 var DEFAULT_CONFIG_FILENAMES = [
   "agent-redact.config.json",
   ".agentredactrc.json",
@@ -1016,7 +1348,7 @@ function loadConfig(explicitPath, searchDir = process.cwd()) {
 
 // src/middleware/universal.ts
 function wrapAgent(agentFn, options = {}) {
-  const { unmaskResponse = true, onLeakDetected, ...redactOptions } = options;
+  const { unmaskResponse = true, unmaskToolInputs, onLeakDetected, ...redactOptions } = options;
   return async (rawPrompt) => {
     const vault = new Vault();
     const redactResult = redact(rawPrompt, {
@@ -1032,11 +1364,35 @@ function wrapAgent(agentFn, options = {}) {
       });
     }
     const agentResponse = await agentFn(redactResult.text);
-    if (unmaskResponse && typeof agentResponse === "string") {
+    if (!unmaskResponse) {
+      return agentResponse;
+    }
+    if (typeof agentResponse === "string") {
       return unmask(agentResponse, vault);
     }
-    return agentResponse;
+    if (isAsyncGenerator(agentResponse)) {
+      return unmaskMixedStream(agentResponse, vault, unmaskToolInputs);
+    }
+    return unmaskDeep(agentResponse, vault, { unmaskToolInputs });
   };
+}
+function isAsyncGenerator(value) {
+  return typeof value === "object" && value !== null && value[Symbol.toStringTag] === "AsyncGenerator";
+}
+async function* unmaskMixedStream(source, vault, unmaskToolInputs) {
+  const unmasker = new StreamingUnmasker(vault);
+  for await (const item of source) {
+    if (typeof item === "string") {
+      const out = unmasker.push(item);
+      if (out) yield out;
+    } else {
+      const pending = unmasker.flush();
+      if (pending) yield pending;
+      yield unmaskDeep(item, vault, { unmaskToolInputs });
+    }
+  }
+  const rest = unmasker.flush();
+  if (rest) yield rest;
 }
 
 // src/middleware/express.ts
@@ -1105,6 +1461,8 @@ exports.PATTERN_MAP = PATTERN_MAP;
 exports.PII_PATTERNS = PII_PATTERNS;
 exports.RedactEngine = RedactEngine;
 exports.RedactTransformStream = RedactTransformStream;
+exports.StreamingUnmasker = StreamingUnmasker;
+exports.UnmaskTransformStream = UnmaskTransformStream;
 exports.Vault = Vault;
 exports.anthropicApiKeyPattern = anthropicApiKeyPattern;
 exports.awsAccessKeyPattern = awsAccessKeyPattern;
@@ -1115,6 +1473,7 @@ exports.calculateShannonEntropy = calculateShannonEntropy;
 exports.createExpressMiddleware = createExpressMiddleware;
 exports.createHighEntropyPattern = createHighEntropyPattern;
 exports.createRedactStream = createRedactStream;
+exports.createUnmaskStream = createUnmaskStream;
 exports.creditCardPattern = creditCardPattern;
 exports.databaseUriPattern = databaseUriPattern;
 exports.databaseUrlPattern = databaseUrlPattern;
@@ -1129,6 +1488,8 @@ exports.huggingFaceTokenPattern = huggingFaceTokenPattern;
 exports.ipv4Pattern = ipv4Pattern;
 exports.ipv6Pattern = ipv6Pattern;
 exports.isHighEntropyToken = isHighEntropyToken;
+exports.isToolUnmaskAllowed = isToolUnmaskAllowed;
+exports.jsonStringEscape = jsonStringEscape;
 exports.jwtTokenPattern = jwtTokenPattern;
 exports.loadConfig = loadConfig;
 exports.mailgunApiKeyPattern = mailgunApiKeyPattern;
@@ -1138,6 +1499,7 @@ exports.parseRegexString = parseRegexString;
 exports.phonePattern = phonePattern;
 exports.privateKeyPattern = privateKeyPattern;
 exports.redact = redact;
+exports.redactDeep = redactDeep;
 exports.resolveCustomPattern = resolveCustomPattern;
 exports.sendgridApiKeyPattern = sendgridApiKeyPattern;
 exports.slackTokenPattern = slackTokenPattern;
@@ -1148,6 +1510,10 @@ exports.telegramBotTokenPattern = telegramBotTokenPattern;
 exports.twilioAccountSidPattern = twilioAccountSidPattern;
 exports.twilioApiKeyPattern = twilioApiKeyPattern;
 exports.unmask = unmask;
+exports.unmaskAnthropicStream = unmaskAnthropicStream;
+exports.unmaskDeep = unmaskDeep;
+exports.unmaskOpenAIStream = unmaskOpenAIStream;
+exports.unmaskTextStream = unmaskTextStream;
 exports.wrapAgent = wrapAgent;
 //# sourceMappingURL=index.cjs.map
 //# sourceMappingURL=index.cjs.map
