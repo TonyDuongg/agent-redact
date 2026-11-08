@@ -583,7 +583,7 @@ Prevent accidental credential commits locally using [pre-commit](https://pre-com
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/TonyDuongg/agent-redact
-    rev: v0.1.5
+    rev: v0.2.0
     hooks:
       - id: agent-redact
 ```
