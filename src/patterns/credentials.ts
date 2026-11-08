@@ -344,6 +344,81 @@ export const mailgunApiKeyPattern: RedactPattern = {
   description: 'Mailgun API authentication key'
 };
 
+/*
+ * AI / LLM provider keys commonly handled by agents. Length quantifiers are lower bounds
+ * (not exact lengths) so a provider lengthening its keys does not silently stop detection.
+ */
+
+export const openrouterApiKeyPattern: RedactPattern = {
+  id: 'openrouter-api-key',
+  name: 'OpenRouter API Key',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bsk-or-v1-[a-f0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: 'OPENROUTER_API_KEY',
+  description: 'OpenRouter API key (sk-or-v1-...)'
+};
+
+export const groqApiKeyPattern: RedactPattern = {
+  id: 'groq-api-key',
+  name: 'Groq API Key',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bgsk_[A-Za-z0-9]{40,}(?![A-Za-z0-9_])/g,
+  placeholder: 'GROQ_API_KEY',
+  description: 'Groq API key (gsk_...)'
+};
+
+export const xaiApiKeyPattern: RedactPattern = {
+  id: 'xai-api-key',
+  name: 'xAI API Key',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bxai-[A-Za-z0-9]{60,}(?![A-Za-z0-9_])/g,
+  placeholder: 'XAI_API_KEY',
+  description: 'xAI (Grok) API key (xai-...)'
+};
+
+export const perplexityApiKeyPattern: RedactPattern = {
+  id: 'perplexity-api-key',
+  name: 'Perplexity API Key',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\bpplx-[A-Za-z0-9]{32,}(?![A-Za-z0-9_])/g,
+  placeholder: 'PERPLEXITY_API_KEY',
+  description: 'Perplexity API key (pplx-...)'
+};
+
+export const replicateApiTokenPattern: RedactPattern = {
+  id: 'replicate-api-token',
+  name: 'Replicate API Token',
+  category: 'credential',
+  severity: 'critical',
+  regex: /\br8_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: 'REPLICATE_API_TOKEN',
+  description: 'Replicate API token (r8_...)'
+};
+
+export const huggingFaceOrgTokenPattern: RedactPattern = {
+  id: 'huggingface-org-token',
+  name: 'Hugging Face Organization Token',
+  category: 'credential',
+  severity: 'high',
+  regex: /\bapi_org_[A-Za-z0-9]{30,}(?![A-Za-z0-9_])/g,
+  placeholder: 'HUGGINGFACE_ORG_TOKEN',
+  description: 'Hugging Face organization API token (api_org_...)'
+};
+
+export const langsmithApiKeyPattern: RedactPattern = {
+  id: 'langsmith-api-key',
+  name: 'LangSmith API Key',
+  category: 'credential',
+  severity: 'high',
+  regex: /\blsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}(?![A-Za-z0-9_])/g,
+  placeholder: 'LANGSMITH_API_KEY',
+  description: 'LangSmith / LangChain personal or service key (lsv2_pt_ / lsv2_sk_)'
+};
+
 /**
  * Export array of all built-in credential patterns
  */
@@ -372,5 +447,12 @@ export const CREDENTIAL_PATTERNS: RedactPattern[] = [
   azureStorageKeyPattern,
   gcpOauthSecretPattern,
   digitalOceanTokenPattern,
-  mailgunApiKeyPattern
+  mailgunApiKeyPattern,
+  openrouterApiKeyPattern,
+  groqApiKeyPattern,
+  xaiApiKeyPattern,
+  perplexityApiKeyPattern,
+  replicateApiTokenPattern,
+  huggingFaceOrgTokenPattern,
+  langsmithApiKeyPattern
 ];

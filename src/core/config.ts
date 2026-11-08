@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import type { RedactPattern, SecretCategory, Severity } from './types.js';
 import type { EntropyConfig } from './entropy.js';
+import { resolvePresets } from '../patterns/presets.js';
 
 export interface CustomPatternConfig {
   id: string;
@@ -34,6 +35,8 @@ export interface AgentRedactConfig {
   entropy?: EntropyConfig;
   /** User-defined custom secret patterns */
   customPatterns?: CustomPatternConfig[];
+  /** Opt-in pattern bundles, e.g. ["vn-pii"] */
+  presets?: string[];
 }
 
 export interface ResolvedConfig extends Omit<AgentRedactConfig, 'customPatterns'> {
@@ -125,6 +128,12 @@ export function loadConfig(
     const parsed = JSON.parse(raw) as AgentRedactConfig;
 
     const resolvedCustomPatterns = parsed.customPatterns?.map(resolveCustomPattern);
+    if (parsed.presets !== undefined) {
+      if (!Array.isArray(parsed.presets) || parsed.presets.some((p) => typeof p !== 'string')) {
+        throw new Error('"presets" must be an array of preset names');
+      }
+      resolvePresets(parsed.presets); // throws "Unknown preset …" early, at load time
+    }
 
     return {
       ...parsed,

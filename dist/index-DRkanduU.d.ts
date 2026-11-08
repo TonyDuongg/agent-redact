@@ -118,6 +118,11 @@ interface RedactOptions {
      * @default false
      */
     includeMatchedText?: boolean;
+    /**
+     * Opt-in pattern bundles to add, e.g. `['vn-pii']` for Vietnamese ID, tax code and bank
+     * account numbers. Unknown names throw.
+     */
+    presets?: string[];
 }
 interface RedactResult {
     /** The sanitized text with all secrets redacted or masked */
@@ -239,6 +244,13 @@ declare const digitalOceanTokenPattern: RedactPattern;
  * Mailgun API Key (key-...)
  */
 declare const mailgunApiKeyPattern: RedactPattern;
+declare const openrouterApiKeyPattern: RedactPattern;
+declare const groqApiKeyPattern: RedactPattern;
+declare const xaiApiKeyPattern: RedactPattern;
+declare const perplexityApiKeyPattern: RedactPattern;
+declare const replicateApiTokenPattern: RedactPattern;
+declare const huggingFaceOrgTokenPattern: RedactPattern;
+declare const langsmithApiKeyPattern: RedactPattern;
 /**
  * Export array of all built-in credential patterns
  */
@@ -273,6 +285,16 @@ declare const phonePattern: RedactPattern;
  */
 declare const PII_PATTERNS: RedactPattern[];
 
+declare const vnCitizenIdPattern: RedactPattern;
+declare const vnIdNumberPattern: RedactPattern;
+declare const vnTaxCodePattern: RedactPattern;
+declare const vnBankAccountPattern: RedactPattern;
+declare const VN_PII_PATTERNS: RedactPattern[];
+
+/** Opt-in pattern bundles that are not part of DEFAULT_PATTERNS */
+declare const PATTERN_PRESETS: Readonly<Record<string, readonly RedactPattern[]>>;
+declare function resolvePresets(names: readonly string[] | undefined): RedactPattern[];
+
 /**
  * All default patterns included in agent-redact
  */
@@ -282,4 +304,4 @@ declare const DEFAULT_PATTERNS: RedactPattern[];
  */
 declare const PATTERN_MAP: ReadonlyMap<string, RedactPattern>;
 
-export { jwtTokenPattern as A, mailgunApiKeyPattern as B, CREDENTIAL_PATTERNS as C, DEFAULT_PATTERNS as D, type EntropyConfig as E, npmTokenPattern as F, openaiApiKeyPattern as G, phonePattern as H, privateKeyPattern as I, sendgridApiKeyPattern as J, slackTokenPattern as K, ssnPattern as L, stripeKeyPattern as M, supabaseKeyPattern as N, telegramBotTokenPattern as O, PATTERN_MAP as P, twilioAccountSidPattern as Q, type RedactPattern as R, type SecretCategory as S, twilioApiKeyPattern as T, type VaultEntry as V, type RedactOptions as a, type RedactResult as b, type Severity as c, PII_PATTERNS as d, type RedactMatch as e, anthropicApiKeyPattern as f, awsAccessKeyPattern as g, awsSecretKeyPattern as h, azureStorageKeyPattern as i, basicAuthUrlPattern as j, calculateShannonEntropy as k, createHighEntropyPattern as l, creditCardPattern as m, databaseUriPattern as n, databaseUrlPattern as o, digitalOceanTokenPattern as p, discordTokenPattern as q, emailPattern as r, gcpOauthSecretPattern as s, githubTokenPattern as t, gitlabTokenPattern as u, googleApiKeyPattern as v, huggingFaceTokenPattern as w, ipv4Pattern as x, ipv6Pattern as y, isHighEntropyToken as z };
+export { telegramBotTokenPattern as $, huggingFaceTokenPattern as A, ipv4Pattern as B, CREDENTIAL_PATTERNS as C, DEFAULT_PATTERNS as D, type EntropyConfig as E, ipv6Pattern as F, isHighEntropyToken as G, jwtTokenPattern as H, langsmithApiKeyPattern as I, mailgunApiKeyPattern as J, npmTokenPattern as K, openaiApiKeyPattern as L, openrouterApiKeyPattern as M, perplexityApiKeyPattern as N, phonePattern as O, PATTERN_MAP as P, privateKeyPattern as Q, type RedactPattern as R, type SecretCategory as S, replicateApiTokenPattern as T, resolvePresets as U, type VaultEntry as V, sendgridApiKeyPattern as W, slackTokenPattern as X, ssnPattern as Y, stripeKeyPattern as Z, supabaseKeyPattern as _, type RedactOptions as a, twilioAccountSidPattern as a0, twilioApiKeyPattern as a1, vnBankAccountPattern as a2, vnCitizenIdPattern as a3, vnIdNumberPattern as a4, vnTaxCodePattern as a5, xaiApiKeyPattern as a6, type RedactResult as b, type Severity as c, PATTERN_PRESETS as d, PII_PATTERNS as e, type RedactMatch as f, VN_PII_PATTERNS as g, anthropicApiKeyPattern as h, awsAccessKeyPattern as i, awsSecretKeyPattern as j, azureStorageKeyPattern as k, basicAuthUrlPattern as l, calculateShannonEntropy as m, createHighEntropyPattern as n, creditCardPattern as o, databaseUriPattern as p, databaseUrlPattern as q, digitalOceanTokenPattern as r, discordTokenPattern as s, emailPattern as t, gcpOauthSecretPattern as u, githubTokenPattern as v, gitlabTokenPattern as w, googleApiKeyPattern as x, groqApiKeyPattern as y, huggingFaceOrgTokenPattern as z };

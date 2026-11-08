@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🎯 Detection
+- **New AI/LLM provider keys:** OpenRouter (`sk-or-v1-`), Groq (`gsk_`), xAI (`xai-`), Perplexity (`pplx-`), Replicate (`r8_`), Hugging Face org tokens (`api_org_`), LangSmith (`lsv2_pt_` / `lsv2_sk_`). Lengths are lower bounds, so longer future keys are still caught.
+- **`vn-pii` preset (opt-in):** Vietnamese CCCD (with province-code validation), CMND/CCCD after an ID keyword, tax code (MST) and bank account numbers after their keywords. Enable it with `presets: ['vn-pii']` (option or config). Unknown preset names throw.
+- **Labelled corpus test:** positive samples for every built-in pattern (enforced) and a negative corpus of realistic non-secret text (0 false positives).
+
+### 🔐 Encrypted vaults
+- **`--vault-key-env <VAR>`** (or `AGENT_REDACT_VAULT_KEY`) encrypts `--vault-out` files with AES-256-GCM, using a scrypt-derived key and an authenticated header. `--unmask` decrypts them and refuses encrypted vaults without a key. Writing an unencrypted vault prints a warning.
+- **Library helpers:** `encryptVaultJson`, `decryptVaultJson`, `isEncryptedVault`.
+
 ### ✨ Repository scanning & CI
 - **Scan mode:** `agent-redact <dir|files...>` reports findings (file:line:column, never values) and exits 1 when any are found. Inside git it uses `git ls-files --cached --others --exclude-standard`, so `.gitignore` is honoured exactly; outside git, common build and dependency directories are skipped. Binary and oversized files are skipped.
 - **`--staged`:** scans the git index, i.e. exactly what is about to be committed.

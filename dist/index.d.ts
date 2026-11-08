@@ -1,5 +1,5 @@
-import { R as RedactPattern, V as VaultEntry, a as RedactOptions, b as RedactResult, E as EntropyConfig, S as SecretCategory, c as Severity } from './index-DBBXvRS7.js';
-export { C as CREDENTIAL_PATTERNS, D as DEFAULT_PATTERNS, P as PATTERN_MAP, d as PII_PATTERNS, e as RedactMatch, f as anthropicApiKeyPattern, g as awsAccessKeyPattern, h as awsSecretKeyPattern, i as azureStorageKeyPattern, j as basicAuthUrlPattern, k as calculateShannonEntropy, l as createHighEntropyPattern, m as creditCardPattern, n as databaseUriPattern, o as databaseUrlPattern, p as digitalOceanTokenPattern, q as discordTokenPattern, r as emailPattern, s as gcpOauthSecretPattern, t as githubTokenPattern, u as gitlabTokenPattern, v as googleApiKeyPattern, w as huggingFaceTokenPattern, x as ipv4Pattern, y as ipv6Pattern, z as isHighEntropyToken, A as jwtTokenPattern, B as mailgunApiKeyPattern, F as npmTokenPattern, G as openaiApiKeyPattern, H as phonePattern, I as privateKeyPattern, J as sendgridApiKeyPattern, K as slackTokenPattern, L as ssnPattern, M as stripeKeyPattern, N as supabaseKeyPattern, O as telegramBotTokenPattern, Q as twilioAccountSidPattern, T as twilioApiKeyPattern } from './index-DBBXvRS7.js';
+import { R as RedactPattern, V as VaultEntry, a as RedactOptions, b as RedactResult, E as EntropyConfig, S as SecretCategory, c as Severity } from './index-DRkanduU.js';
+export { C as CREDENTIAL_PATTERNS, D as DEFAULT_PATTERNS, P as PATTERN_MAP, d as PATTERN_PRESETS, e as PII_PATTERNS, f as RedactMatch, g as VN_PII_PATTERNS, h as anthropicApiKeyPattern, i as awsAccessKeyPattern, j as awsSecretKeyPattern, k as azureStorageKeyPattern, l as basicAuthUrlPattern, m as calculateShannonEntropy, n as createHighEntropyPattern, o as creditCardPattern, p as databaseUriPattern, q as databaseUrlPattern, r as digitalOceanTokenPattern, s as discordTokenPattern, t as emailPattern, u as gcpOauthSecretPattern, v as githubTokenPattern, w as gitlabTokenPattern, x as googleApiKeyPattern, y as groqApiKeyPattern, z as huggingFaceOrgTokenPattern, A as huggingFaceTokenPattern, B as ipv4Pattern, F as ipv6Pattern, G as isHighEntropyToken, H as jwtTokenPattern, I as langsmithApiKeyPattern, J as mailgunApiKeyPattern, K as npmTokenPattern, L as openaiApiKeyPattern, M as openrouterApiKeyPattern, N as perplexityApiKeyPattern, O as phonePattern, Q as privateKeyPattern, T as replicateApiTokenPattern, U as resolvePresets, W as sendgridApiKeyPattern, X as slackTokenPattern, Y as ssnPattern, Z as stripeKeyPattern, _ as supabaseKeyPattern, $ as telegramBotTokenPattern, a0 as twilioAccountSidPattern, a1 as twilioApiKeyPattern, a2 as vnBankAccountPattern, a3 as vnCitizenIdPattern, a4 as vnIdNumberPattern, a5 as vnTaxCodePattern, a6 as xaiApiKeyPattern } from './index-DRkanduU.js';
 import { Transform, TransformCallback } from 'node:stream';
 
 /**
@@ -114,6 +114,12 @@ declare function redact(text: string, options?: RedactOptions & {
  * Quick unmasking helper
  */
 declare function unmask(text: string, vault: Vault): string;
+
+declare function isEncryptedVault(content: string): boolean;
+/** Encrypts the JSON produced by `vault.toJSON()` */
+declare function encryptVaultJson(json: string, passphrase: string): string;
+/** Decrypts an encrypted vault file back to the JSON accepted by `Vault.fromJSON` */
+declare function decryptVaultJson(content: string, passphrase: string): string;
 
 interface RedactStreamOptions extends RedactOptions {
     vault?: Vault;
@@ -270,6 +276,8 @@ interface AgentRedactConfig {
     entropy?: EntropyConfig;
     /** User-defined custom secret patterns */
     customPatterns?: CustomPatternConfig[];
+    /** Opt-in pattern bundles, e.g. ["vn-pii"] */
+    presets?: string[];
 }
 interface ResolvedConfig extends Omit<AgentRedactConfig, 'customPatterns'> {
     customPatterns?: RedactPattern[];
@@ -346,4 +354,4 @@ declare function createExpressMiddleware(options?: RedactOptions & {
     redact?: RedactRequestExtension;
 }, _res: unknown, next: () => void) => void;
 
-export { type AgentInterceptorOptions, type AgentRedactConfig, type CustomPatternConfig, type DeepRedactOptions, type DeepRedactResult, EntropyConfig, RedactEngine, RedactOptions, RedactPattern, type RedactRequestExtension, RedactResult, type RedactStreamOptions, RedactTransformStream, type ResolvedConfig, SecretCategory, Severity, type StreamAdapterOptions, StreamingUnmasker, type ToolInputPolicy, type UnmaskDeepOptions, UnmaskTransformStream, Vault, VaultEntry, createExpressMiddleware, createRedactStream, createUnmaskStream, isToolUnmaskAllowed, jsonStringEscape, loadConfig, parseRegexString, redact, redactDeep, resolveCustomPattern, unmask, unmaskAnthropicStream, unmaskDeep, unmaskOpenAIStream, unmaskTextStream, wrapAgent };
+export { type AgentInterceptorOptions, type AgentRedactConfig, type CustomPatternConfig, type DeepRedactOptions, type DeepRedactResult, EntropyConfig, RedactEngine, RedactOptions, RedactPattern, type RedactRequestExtension, RedactResult, type RedactStreamOptions, RedactTransformStream, type ResolvedConfig, SecretCategory, Severity, type StreamAdapterOptions, StreamingUnmasker, type ToolInputPolicy, type UnmaskDeepOptions, UnmaskTransformStream, Vault, VaultEntry, createExpressMiddleware, createRedactStream, createUnmaskStream, decryptVaultJson, encryptVaultJson, isEncryptedVault, isToolUnmaskAllowed, jsonStringEscape, loadConfig, parseRegexString, redact, redactDeep, resolveCustomPattern, unmask, unmaskAnthropicStream, unmaskDeep, unmaskOpenAIStream, unmaskTextStream, wrapAgent };

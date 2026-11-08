@@ -1,6 +1,7 @@
 // Core Engine & Vault
 export { RedactEngine, redact, unmask } from './core/engine.js';
 export { Vault } from './core/vault.js';
+export { encryptVaultJson, decryptVaultJson, isEncryptedVault } from './core/vault-crypto.js';
 export { createRedactStream, RedactTransformStream } from './core/stream.js';
 export type { RedactStreamOptions } from './core/stream.js';
 
