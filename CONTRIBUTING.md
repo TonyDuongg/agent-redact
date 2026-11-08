@@ -81,3 +81,16 @@ We welcome contributions expanding secret pattern coverage! To add a new pattern
 3. Push to your branch and open a PR against `main`.
 4. Ensure all GitHub Actions CI checks pass.
 
+---
+
+## 🚀 Releasing (maintainers)
+
+1. Open a PR that bumps the version in all five places (`package.json`, `package-lock.json`, `src/version.ts`, `python/pyproject.toml`, `python/src/agent_redact/__init__.py`) and turns `[Unreleased]` in `CHANGELOG.md` into `[x.y.z] - date`.
+2. Merge it with a merge commit.
+3. Push an annotated tag `vX.Y.Z` on the merge commit. Two workflows start:
+   * `release.yml` checks the version and publishes to npm;
+   * `release-python.yml` builds and tests the Python package, waits until the same version is on npm, and publishes to PyPI through Trusted Publishing (environment `pypi`).
+4. Create the GitHub Release from the `CHANGELOG.md` entry.
+
+`release-python.yml` can also be run manually: the default target is TestPyPI (a dry run). Choosing `pypi` publishes a version that is already tagged, and only from `main` when `python/src` and `pyproject.toml` are unchanged since that tag.
+

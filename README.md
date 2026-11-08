@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/TonyDuongg/agent-redact/actions/workflows/ci.yml/badge.svg)](https://github.com/TonyDuongg/agent-redact/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/agent-redact.svg?style=flat&color=3178c6)](https://www.npmjs.com/package/agent-redact)
+[![PyPI version](https://img.shields.io/pypi/v/agent-redact.svg?style=flat&color=3776ab)](https://pypi.org/project/agent-redact/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-blue)](package.json)
@@ -426,7 +427,13 @@ Some MCP clients start servers with an unexpected working directory (for example
 
 ### 8. Python Agents (LangChain, CrewAI, AutoGen) & Other Languages
 
-The `agent-redact` Python package (in [`python/`](python/)) wraps the CLI, so Python code gets the same engine with no Python dependencies. It needs Node.js 20+. The CLI is found via an absolute `AGENT_REDACT_CLI`, a global `npm i -g agent-redact`, or a one-time install into a private user cache. It is always started as `node <absolute path>`, never via shims, `npx` or the current directory.
+The `agent-redact` Python package (source in [`python/`](python/)) wraps the CLI, so Python code gets the same engine with no Python dependencies.
+
+```bash
+pip install agent-redact
+```
+
+> **Node.js 20+ is still required.** The PyPI package contains only the Python wrapper; the detection engine is the Node.js CLI. It is found via an absolute `AGENT_REDACT_CLI`, a global `npm i -g agent-redact`, or a one-time install of the matching version into a private user cache. It is always started as `node <absolute path>`, never via shims, `npx` or the current directory.
 
 ```python
 from agent_redact import redact, scan, Session
@@ -441,7 +448,7 @@ with Session() as s:                    # reversible across a whole conversation
 findings = scan(["."])                  # repo audit, honours .gitignore
 ```
 
-The Session vault is stored in a private temporary directory, **encrypted** with a random per-session passphrase that never touches disk, and is deleted when the `with` block ends. Install from the repository with `pip install ./python` until the package is published on PyPI.
+The Session vault is stored in a private temporary directory, **encrypted** with a random per-session passphrase that never touches disk, and is deleted when the `with` block ends.
 
 Other languages can pipe text through the CLI: `agent-redact --json` on stdin returns the redacted text plus matches. Use `-r --vault-out <file> --vault-key-env <VAR>` and `--unmask <file>` for reversible round-trips, and `--vault-in` to continue numbering across calls.
 
