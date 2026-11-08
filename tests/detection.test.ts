@@ -209,4 +209,32 @@ describe('Encrypted vault files', () => {
     const res = await cli(['app.env', '-r', '-o', 'safe.env', '--vault-out', 'v.json'], dir, { AGENT_REDACT_VAULT_KEY: '' });
     expect(res.stderr).toMatch(/unencrypted/i);
   });
+
+  it('CLI --vault-in continues an existing (encrypted) vault without placeholder collisions', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ar-vaultin-'));
+    dirs.push(dir);
+    const second = j('AKIA', 'ABCDEFGHIJKLMNOP');
+    writeFileSync(join(dir, 'a.txt'), `first ${secret}\n`);
+    writeFileSync(join(dir, 'b.txt'), `second ${second}\n`);
+    const env = { K: 'pass for continuation' };
+    const keyArgs = ['--vault-key-env', 'K'];
+
+    const one = await cli(['a.txt', '-r', '--vault-out', 'v.json', ...keyArgs], dir, env);
+    expect(one.stdout).toBe('first [AWS_ACCESS_KEY_ID_1]\n');
+    const two = await cli(['b.txt', '-r', '--vault-in', 'v.json', '--vault-out', 'v.json', ...keyArgs], dir, env);
+    expect(two.stdout).toBe('second [AWS_ACCESS_KEY_ID_2]\n');
+
+    writeFileSync(join(dir, 'answer.txt'), 'use [AWS_ACCESS_KEY_ID_1] then [AWS_ACCESS_KEY_ID_2]');
+    const restored = await cli(['answer.txt', '--unmask', 'v.json', ...keyArgs], dir, env);
+    expect(restored.stdout).toBe(`use ${secret} then ${second}`);
+  });
+
+  it('CLI --preset enables opt-in presets and rejects unknown ones', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ar-preset-cli-'));
+    dirs.push(dir);
+    writeFileSync(join(dir, 'id.txt'), `CCCD ${j('079', '2', '03', '012345')}\n`);
+    expect((await cli(['id.txt'], dir)).stdout).toContain('079');
+    expect((await cli(['id.txt', '--preset', 'vn-pii'], dir)).stdout).toBe('CCCD [REDACTED_VN_CITIZEN_ID]\n');
+    expect((await cli(['id.txt', '--preset', 'nope'], dir)).code).not.toBe(0);
+  });
 });

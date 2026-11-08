@@ -41,3 +41,11 @@ Thumbs.db
 .vitest/
 .turbo/
 
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+python/dist/
+*.egg-info/
