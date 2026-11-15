@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.3.1] - 2026-11-15
+
+Maintenance release: npm Trusted Publishing, SHA-pinned actions and Dependabot, docs that match what the package does, and the license file in the Python package. No library behavior changes.
+
+### ⚠️ Upgrade notes
+- **No API or detection changes.** The package's README tagline and badge changed, and the Python wheel and sdist now include `LICENSE`.
+- **Provenance:** npm releases are now published via Trusted Publishing (OIDC) from the `npm` environment and still carry provenance. Tooling that pins publisher identity should expect the `release.yml` workflow and the `npm` environment.
 
 ### 🔒 Supply chain
 - **npm Trusted Publishing (OIDC):** `release.yml` no longer uses an `NPM_TOKEN` secret. A `verify` job (no OIDC) checks that the tag is on `main` and matches `package.json`, runs the type check and tests, and requires the rebuilt `dist/` to equal the committed one. A `publish` job then publishes the committed `dist/` with `--ignore-scripts`, from the `npm` environment, on Node 24 (npm ≥ 11.5.1 is enforced). It is the only job with `id-token: write`, and it installs and builds nothing. Provenance is generated automatically.
