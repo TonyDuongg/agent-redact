@@ -119,7 +119,7 @@ ${colors.bold}USAGE:${colors.reset}
   cat log.txt | npx agent-redact [options]  Redact secrets from standard input (stdin)
   npx agent-redact <dir|files...>           Scan (honours .gitignore in git repos); exit 1 on findings
   npx agent-redact --staged                 Scan what is staged for commit (git index)
-  npx agent-redact mcp                      Start Model Context Protocol (MCP) server
+  npx agent-redact mcp [--allow-unmask-text] Start Model Context Protocol (MCP) server
   npx agent-redact hook [--block-writes]    Claude Code hook (reads hook JSON on stdin)
   npx agent-redact serve --stdio            Long-lived JSON-RPC worker on stdin/stdout (Python package)
   npx agent-redact proxy --provider <name>  Local redacting proxy for the Anthropic/OpenAI API (see proxy --help)
@@ -179,7 +179,7 @@ async function main(): Promise<void> {
 
   if (args[0] === 'mcp') {
     const { runMcpServer } = await import('../mcp/server.js');
-    await runMcpServer();
+    await runMcpServer(args.slice(1));
     return;
   }
 

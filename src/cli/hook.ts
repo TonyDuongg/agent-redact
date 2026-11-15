@@ -55,6 +55,7 @@ const PATH_ONLY_TOOLS = new Set(['Glob', 'LS', 'TodoWrite']);
 /** agent-redact's own MCP tools are the safe way to read secrets-bearing files */
 const TRUSTED_TOOLS = new Set([
   'mcp__agent-redact__scan_file',
+  'mcp__agent-redact__read_file_redacted',
   'mcp__agent-redact__redact_text',
   'mcp__agent-redact__unmask_text',
   'mcp__agent-redact__get_vault_status',
@@ -151,7 +152,8 @@ function fileBlockMessage(what: string, path: string, check: Exclude<FileCheck, 
   }
   return (
     `agent-redact blocked ${what} ${path}: it contains ${check.summary.count} secret(s) (${check.summary.types}). ` +
-    'Ask the user first, or use the agent-redact MCP tool scan_file to read a redacted copy.'
+    'Ask the user first, or use the agent-redact MCP tools read_file_redacted (to read it with placeholders) ' +
+    'and edit_file_redacted (to change it without seeing the secrets).'
   );
 }
 
@@ -307,6 +309,15 @@ export function evaluateHook(input: HookInput, options: HookOptions = {}): HookD
     const s = summarize(JSON.stringify(toolInput), redactOptions);
     return s.count > 0
       ? { block: true, message: `agent-redact blocked ${tool}: the new content contains ${s.count} secret(s) (${s.types}).` }
+      : { block: false };
+  }
+
+  // edit_file_redacted targets secret-bearing files by design and only ever returns placeholders,
+  // so its path is not checked; its input must still not carry literal secrets.
+  if (tool === 'mcp__agent-redact__edit_file_redacted') {
+    const s = summarize(JSON.stringify(toolInput), redactOptions);
+    return s.count > 0
+      ? { block: true, message: `agent-redact blocked edit_file_redacted: its input contains ${s.count} secret(s) (${s.types}). Use the file's placeholders instead.` }
       : { block: false };
   }
 

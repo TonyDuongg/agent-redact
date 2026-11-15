@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### ⚠️ Upgrade notes (behavior changes)
+- **MCP `unmask_text` is disabled by default.** It can write any secret of the session into any file inside the sandbox, so a prompt-injected model could copy secrets into files that get committed or published. It now returns an error that explains how to enable it: `agent-redact mcp --allow-unmask-text`, `AGENT_REDACT_ALLOW_UNMASK_TEXT=1`, or `createMcpServer({ allowUnmaskText: true })`. Use `read_file_redacted` / `edit_file_redacted` to change files that contain secrets.
+
+### ✨ Edit files that contain secrets without seeing them (MCP)
+- **`read_file_redacted {filePath}`:** returns the content with placeholders unique to that file (`[AWS_ACCESS_KEY_ID_1]` …), plus a `revision` (sha256 of the real content). Each file has its own in-memory vault, so numbering is stable across reads.
+- **`edit_file_redacted {filePath, oldString, newString, replaceAll?, revision}`:** applies the edit to the redacted text, then writes it back with **only that file's** placeholders restored.
+  - A placeholder that belongs to another file or to the `redact_text` session is refused, so secrets cannot be copied between files. Placeholder-shaped text unknown to every vault (`[STEP_1]`) is ordinary text.
+  - The edit is refused if the file changed since the last read (revision mismatch), if the file was never read, or if `oldString` is empty, missing or ambiguous (`replaceAll` allows several matches).
+  - The write is atomic (temp file + rename in the same directory), keeps the file mode and CRLF line endings, and leaves no backup with plaintext secrets.
+  - Both tools use the same sandbox as `scan_file`: allowed roots, symlinks resolved, no writes inside `.git`, 5 MB limit, binary files refused.
+- **Claude Code hook:**
+  - blocked `Read`s now point to these tools;
+  - `read_file_redacted` is trusted;
+  - `edit_file_redacted` may target secret files, but its input is still checked for literal secrets.
+- `agent-redact mcp` and `agent-redact-mcp` accept options (`--allow-unmask-text`); unknown options are rejected. `mcpOptionsFromArgs` is exported.
+- Tests:
+  - `tests/mcp-redacted-files.test.ts` (12) covers the two tools, the hook and the `unmask_text` opt-in;
+  - the existing `unmask_text` tests enable it explicitly, so its path checks are still exercised;
+  - verified end to end over stdio with `agent-redact mcp`.
+
+---
+
 ## [0.4.0] - 2026-11-15
 
 No-code integration. `agent-redact proxy` protects any Anthropic or OpenAI client through `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`, including streaming. The Python package now talks to one long-lived worker, so a call takes about 1 ms instead of about 0.5 s.

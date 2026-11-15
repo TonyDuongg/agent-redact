@@ -1,4 +1,4 @@
 #!/usr/bin/env node
-import { runMcpServer, createMcpServer } from './server.js';
-export { runMcpServer, createMcpServer };
+import { runMcpServer, createMcpServer, mcpOptionsFromArgs } from './server.js';
+export { runMcpServer, createMcpServer, mcpOptionsFromArgs };
 export type { McpServerOptions } from './server.js';

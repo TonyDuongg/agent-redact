@@ -21,7 +21,8 @@ import { tmpdir } from 'node:os';
 const sampleKey = (...parts: string[]) => parts.join('');
 
 async function connectClient(allowedRoots: string[]): Promise<Client> {
-  const server = createMcpServer({ allowedRoots });
+  // unmask_text is opt-in since 0.5; enable it so its path checks are really exercised
+  const server = createMcpServer({ allowedRoots, allowUnmaskText: true });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'audit-round3', version: '1.0.0' }, { capabilities: {} });
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);

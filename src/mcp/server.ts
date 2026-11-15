@@ -9,9 +9,13 @@ import {
   openSync,
   closeSync,
   fchmodSync,
+  chmodSync,
+  renameSync,
+  unlinkSync,
   statSync,
   constants as fsConstants
 } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { redact, unmask } from '../core/engine.js';
@@ -28,6 +32,51 @@ export interface McpServerOptions {
   allowedRoots?: string[];
   /** Maximum number of distinct secrets kept in the session vault (default 10,000) */
   vaultMaxEntries?: number;
+  /**
+   * Enable `unmask_text`, which writes restored secrets into any file inside the allowed
+   * roots. Off by default since 0.5: a prompt-injected model could copy a secret into a file
+   * that is later published. Prefer `edit_file_redacted`, which only restores a file's own
+   * secrets into that same file.
+   */
+  allowUnmaskText?: boolean;
+}
+
+/** Options from `agent-redact mcp` / `agent-redact-mcp` arguments and the environment */
+export function mcpOptionsFromArgs(args: string[], env: NodeJS.ProcessEnv = process.env): McpServerOptions {
+  for (const arg of args) {
+    if (arg !== '--allow-unmask-text') throw new Error(`Unknown option for the MCP server: ${arg}`);
+  }
+  return { allowUnmaskText: args.includes('--allow-unmask-text') || env.AGENT_REDACT_ALLOW_UNMASK_TEXT === '1' };
+}
+
+const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
+
+/** Placeholder-shaped tokens, e.g. [AWS_ACCESS_KEY_ID_1] */
+const PLACEHOLDER_TOKEN_RE = /\[[A-Z][A-Z0-9_]*_\d+\]/g;
+
+/**
+ * Atomic write: a temp file in the same directory, given the original file's mode, renamed
+ * over the target. Readers never see a half-written file, and no backup with plaintext
+ * secrets is left behind.
+ */
+function atomicReplaceFile(path: string, content: string, mode: number): void {
+  const temp = join(dirname(path), `.${basename(path)}.agent-redact-${randomBytes(6).toString('hex')}.tmp`);
+  writeFileSync(temp, content, { encoding: 'utf-8', mode: mode & 0o777, flag: 'wx' });
+  try {
+    try {
+      chmodSync(temp, mode & 0o777); // umask may have narrowed the creation mode
+    } catch {
+      // chmod is best effort on Windows
+    }
+    renameSync(temp, path);
+  } catch (err) {
+    try {
+      unlinkSync(temp);
+    } catch {
+      // already gone
+    }
+    throw err;
+  }
 }
 
 /**
@@ -212,6 +261,21 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
         )
     },
     async ({ text, outputFilePath }) => {
+      if (!options.allowUnmaskText) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text:
+                'Error: unmask_text is disabled. It can write any secret of this session into any file, so a ' +
+                'prompt-injected model could copy secrets into files that get published. To change a file that ' +
+                'contains secrets, use read_file_redacted and edit_file_redacted instead. If you really need ' +
+                'unmask_text, ask the user to start the server with --allow-unmask-text (or AGENT_REDACT_ALLOW_UNMASK_TEXT=1).'
+            }
+          ]
+        };
+      }
       if (!outputFilePath || outputFilePath.trim().length === 0) {
         return {
           isError: true,
@@ -389,6 +453,117 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
     }
   );
 
+  // Tools 7 & 8: read_file_redacted / edit_file_redacted. Each file gets its own vault, so
+  // placeholders are numbered per file and an edit can only restore that file's own secrets.
+  const fileVaults = new Map<string, Vault>();
+  const errorResult = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] });
+  const jsonResult = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] });
+
+  type Loaded = { realPath: string; content: string; mode: number };
+  const loadTextFile = (filePath: string, mode: 'read' | 'write'): Loaded | ReturnType<typeof errorResult> => {
+    const check = checkPath(filePath, allowedRoots, mode);
+    if (!check.ok) return securityError('filePath', filePath, check.reason);
+    if (!existsSync(check.realPath)) return errorResult(`File not found: ${filePath}`);
+    const stat = statSync(check.realPath);
+    if (!stat.isFile()) return errorResult(`Not a regular file: ${filePath}`);
+    if (stat.size > DEFAULT_MAX_SCAN_BYTES) {
+      return errorResult(`File size (${(stat.size / (1024 * 1024)).toFixed(2)} MB) exceeds maximum allowed limit of 5 MB.`);
+    }
+    if (stat.size > 0 && isBinaryFile(check.realPath)) return errorResult(`Cannot handle binary file: ${filePath}`);
+    return { realPath: check.realPath, content: readFileSync(check.realPath, 'utf-8'), mode: stat.mode };
+  };
+
+  server.tool(
+    'read_file_redacted',
+    'Reads a text file with every secret replaced by a placeholder unique to that file (e.g. [AWS_ACCESS_KEY_ID_1]). ' +
+      'Use it instead of Read for files that contain secrets (.env, configs, credentials), then change them with ' +
+      'edit_file_redacted. Secret values never enter the conversation. Returns the redacted content and a revision.',
+    {
+      filePath: z.string().describe('Relative or absolute path of the file to read')
+    },
+    async ({ filePath }) => {
+      const loaded = loadTextFile(filePath, 'read');
+      if ('isError' in loaded) return loaded;
+      let vault = fileVaults.get(loaded.realPath);
+      if (!vault) {
+        vault = new Vault();
+        fileVaults.set(loaded.realPath, vault);
+      }
+      const result = redact(loaded.content, { reversible: true, vault });
+      return jsonResult({
+        filePath,
+        content: result.text,
+        revision: sha256(loaded.content),
+        totalSecrets: result.totalLeaks,
+        stats: result.stats
+      });
+    }
+  );
+
+  server.tool(
+    'edit_file_redacted',
+    'Edits a file previously read with read_file_redacted, working on the redacted text: oldString must match the ' +
+      'redacted content exactly (placeholders included) and be unique unless replaceAll is set. Placeholders of this ' +
+      'file in newString are written back as the real secrets; placeholders from other files are refused. Pass the ' +
+      'revision from the last read or edit; the edit is refused if the file changed in between.',
+    {
+      filePath: z.string().describe('Path of a file already read with read_file_redacted'),
+      oldString: z.string().describe('Exact text to replace, as shown by read_file_redacted'),
+      newString: z.string().describe('Replacement text; may contain this file\'s placeholders'),
+      replaceAll: z.boolean().default(false).describe('Replace every occurrence of oldString'),
+      revision: z.string().describe('Revision returned by the last read_file_redacted / edit_file_redacted call')
+    },
+    async ({ filePath, oldString, newString, replaceAll, revision }) => {
+      const loaded = loadTextFile(filePath, 'write');
+      if ('isError' in loaded) return loaded;
+      const vault = fileVaults.get(loaded.realPath);
+      if (!vault) return errorResult(`Call read_file_redacted first on ${filePath}.`);
+      if (sha256(loaded.content) !== revision) {
+        return errorResult(`${filePath} changed since read_file_redacted (revision mismatch). Read it again, then retry the edit.`);
+      }
+      if (oldString === '') return errorResult('oldString must not be empty.');
+
+      const redacted = redact(loaded.content, { reversible: true, vault }).text;
+      const crlf = loaded.content.includes('\r\n');
+      const toEol = (s: string) => (crlf ? s.replace(/\r?\n/g, '\r\n') : s);
+      const oldText = toEol(oldString);
+      const newText = toEol(newString);
+
+      const count = redacted.split(oldText).length - 1;
+      if (count === 0) return errorResult(`oldString not found in the redacted content of ${filePath}.`);
+      if (count > 1 && !replaceAll) {
+        return errorResult(`oldString occurs ${count} times in ${filePath}; add surrounding context to make it unique, or set replaceAll.`);
+      }
+
+      for (const token of newText.match(PLACEHOLDER_TOKEN_RE) ?? []) {
+        if (vault.getOriginal(token) !== undefined) continue;
+        const foreign =
+          sessionVault.getOriginal(token) !== undefined ||
+          [...fileVaults.values()].some((v) => v !== vault && v.getOriginal(token) !== undefined);
+        if (foreign) {
+          return errorResult(
+            `Placeholder ${token} does not belong to this file; secrets cannot be copied between files. ` +
+              'Ask the user to add the value themselves.'
+          );
+        }
+        // Not a placeholder of any vault: ordinary text such as "[STEP_1]"
+      }
+
+      const updated = replaceAll ? redacted.split(oldText).join(newText) : redacted.replace(oldText, () => newText);
+      const evicted = vault.findEvictedPlaceholders(updated);
+      if (evicted.length > 0) {
+        return errorResult(`Cannot restore ${evicted.join(', ')}: evicted from this file's vault. Read the file again.`);
+      }
+      const restored = vault.unmask(updated);
+      try {
+        atomicReplaceFile(loaded.realPath, restored, loaded.mode);
+      } catch (err: unknown) {
+        return errorResult(`Failed writing ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return jsonResult({ filePath, replacements: replaceAll ? count : 1, revision: sha256(restored) });
+    }
+  );
+
   // Tool 4: get_vault_status
   server.tool(
     'get_vault_status',
@@ -468,8 +643,9 @@ export function createMcpServer(options: McpServerOptions = {}): McpServer {
   return server;
 }
 
-export async function runMcpServer(): Promise<void> {
-  const server = createMcpServer();
+/** `args`: the arguments after `agent-redact mcp` (or of `agent-redact-mcp`) */
+export async function runMcpServer(args: string[] = process.argv.slice(2)): Promise<void> {
+  const server = createMcpServer(mcpOptionsFromArgs(args));
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
