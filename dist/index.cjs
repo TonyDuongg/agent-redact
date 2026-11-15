@@ -5,6 +5,7 @@ var stream = require('stream');
 var string_decoder = require('string_decoder');
 var fs = require('fs');
 var path = require('path');
+var http = require('http');
 
 // src/patterns/credentials.ts
 var anthropicApiKeyPattern = {
@@ -1663,6 +1664,246 @@ function createExpressMiddleware(options = {}) {
     next();
   };
 }
+var DEFAULT_UPSTREAM = {
+  anthropic: "https://api.anthropic.com",
+  openai: "https://api.openai.com"
+};
+var DEFAULT_MAX_BODY = 32 * 1024 * 1024;
+var HOP_BY_HOP = /* @__PURE__ */ new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+  "content-length",
+  "accept-encoding"
+]);
+var LOOPBACK_HOST = [127, 0, 0, 1].join(".");
+var IPV6_LOOPBACK2 = ["", "", "1"].join(":");
+var LOOPBACK = /* @__PURE__ */ new Set([LOOPBACK_HOST, "localhost", `[${IPV6_LOOPBACK2}]`, IPV6_LOOPBACK2]);
+function upstreamBase(upstream) {
+  let url;
+  try {
+    url = new URL(upstream);
+  } catch {
+    throw new Error(`Invalid upstream URL: ${upstream}`);
+  }
+  const ok = url.protocol === "https:" || url.protocol === "http:" && LOOPBACK.has(url.hostname);
+  if (!ok) throw new Error("The upstream must use https (plain http is only allowed for loopback addresses)");
+  return url.origin + url.pathname.replace(/\/+$/, "");
+}
+var HttpError = class extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+  status;
+};
+async function readBody(req, limit) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw new HttpError(413, `Request body exceeds ${limit} bytes`);
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+function sendError(res, status, message) {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify({ type: "error", error: { type: "agent_redact_proxy_error", message } }));
+}
+async function* readSse(body) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const parse = (block) => {
+    let event;
+    const data = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line === "" || line.startsWith(":")) continue;
+      const colon = line.indexOf(":");
+      const field = colon === -1 ? line : line.slice(0, colon);
+      const value = colon === -1 ? "" : line.slice(colon + 1).replace(/^ /, "");
+      if (field === "event") event = value;
+      else if (field === "data") data.push(value);
+    }
+    return data.length > 0 ? { event, data: data.join("\n") } : null;
+  };
+  for await (const chunk of body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let match;
+    while (match = /\r?\n\r?\n/.exec(buffer)) {
+      const ev = parse(buffer.slice(0, match.index));
+      buffer = buffer.slice(match.index + match[0].length);
+      if (ev) yield ev;
+    }
+  }
+  buffer += decoder.decode();
+  const last = parse(buffer);
+  if (last) yield last;
+}
+var RAW = /* @__PURE__ */ Symbol("raw-sse-event");
+function formatSse(event, data) {
+  const lines = data.split("\n").map((l) => `data: ${l}`);
+  return `${event ? `event: ${event}
+` : ""}${lines.join("\n")}
+
+`;
+}
+async function* unmaskSse(body, provider, vault, unmaskToolInputs) {
+  let done = false;
+  async function* parsed() {
+    for await (const ev of readSse(body)) {
+      if (provider === "openai" && ev.data.trim() === "[DONE]") {
+        done = true;
+        return;
+      }
+      try {
+        yield JSON.parse(ev.data);
+      } catch {
+        yield { [RAW]: ev };
+      }
+    }
+  }
+  const adapter = provider === "anthropic" ? unmaskAnthropicStream : unmaskOpenAIStream;
+  for await (const item of adapter(parsed(), vault, { unmaskToolInputs })) {
+    if (typeof item === "object" && item !== null && RAW in item) {
+      const raw = item[RAW];
+      yield formatSse(raw.event, raw.data);
+      continue;
+    }
+    const type = provider === "anthropic" && typeof item?.type === "string" ? item.type : void 0;
+    yield formatSse(type, JSON.stringify(item));
+  }
+  if (done) yield "data: [DONE]\n\n";
+}
+function describeStats(stats) {
+  const parts = Object.entries(stats).map(([id, n]) => `${id}:${n}`);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+async function startProxy(options) {
+  const provider = options.provider;
+  if (provider !== "anthropic" && provider !== "openai") throw new Error('provider must be "anthropic" or "openai"');
+  const base = upstreamBase(options.upstream ?? DEFAULT_UPSTREAM[provider]);
+  const maxBody = options.maxBodyBytes ?? DEFAULT_MAX_BODY;
+  const vault = new Vault();
+  const log = options.log ?? (() => {
+  });
+  const policy = options.unmaskToolInputs;
+  const handle = async (req, res) => {
+    const path = req.url ?? "/";
+    const method = req.method ?? "GET";
+    if (!path.startsWith("/")) throw new HttpError(400, "Only origin-form request paths are accepted");
+    if (req.headers.origin !== void 0) throw new HttpError(403, "Browser requests are not allowed");
+    const host = String(req.headers.host ?? "");
+    const hostname = host.startsWith("[") ? host.slice(0, host.indexOf("]") + 1) : host.split(":")[0];
+    if (!LOOPBACK.has(hostname.toLowerCase())) throw new HttpError(403, "Requests must address the proxy by its loopback address");
+    const raw = await readBody(req, maxBody);
+    let body;
+    let redacted = 0;
+    let stats = {};
+    if (raw.length > 0) {
+      const encoding = String(req.headers["content-encoding"] ?? "identity").toLowerCase();
+      if (encoding !== "identity") throw new HttpError(415, "Compressed request bodies are not supported");
+      if (!/^application\/(?:[\w.+-]+\+)?json\b/i.test(String(req.headers["content-type"] ?? ""))) {
+        throw new HttpError(415, "Only JSON request bodies are accepted");
+      }
+      let value;
+      try {
+        value = JSON.parse(raw.toString("utf8"));
+      } catch {
+        throw new HttpError(400, "Malformed JSON request body");
+      }
+      const result = redactDeep(value, { ...options.redactOptions, vault, skipKeys: ["signature"] });
+      body = JSON.stringify(result.value);
+      redacted = result.totalLeaks;
+      stats = result.stats;
+    }
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(req.headers)) {
+      if (value === void 0 || HOP_BY_HOP.has(name.toLowerCase())) continue;
+      for (const v of Array.isArray(value) ? value : [value]) headers.append(name, v);
+    }
+    headers.set("accept-encoding", "identity");
+    const abort = new AbortController();
+    res.on("close", () => abort.abort());
+    let upstream;
+    try {
+      upstream = await fetch(base + path, { method, headers, body, redirect: "manual", signal: abort.signal });
+    } catch {
+      throw new HttpError(502, "Upstream request failed");
+    }
+    const outHeaders = {};
+    upstream.headers.forEach((value, name) => {
+      if (!HOP_BY_HOP.has(name) && name !== "content-encoding" && !name.startsWith("access-control-")) outHeaders[name] = value;
+    });
+    const contentType = upstream.headers.get("content-type") ?? "";
+    log(`${method} ${path.split("?")[0]} -> ${upstream.status} redacted=${redacted}${describeStats(stats)}`);
+    if (/text\/event-stream/i.test(contentType) && upstream.body) {
+      res.writeHead(upstream.status, outHeaders);
+      for await (const chunk of unmaskSse(upstream.body, provider, vault, policy)) {
+        if (!res.write(chunk)) await new Promise((r) => res.once("drain", r));
+      }
+      res.end();
+      return;
+    }
+    if (/json/i.test(contentType)) {
+      const text = await upstream.text();
+      let out = text;
+      try {
+        out = JSON.stringify(unmaskDeep(JSON.parse(text), vault, { unmaskToolInputs: policy }));
+      } catch {
+      }
+      res.writeHead(upstream.status, outHeaders);
+      res.end(out);
+      return;
+    }
+    res.writeHead(upstream.status, outHeaders);
+    if (upstream.body) {
+      for await (const chunk of upstream.body) {
+        if (!res.write(chunk)) await new Promise((r) => res.once("drain", r));
+      }
+    }
+    res.end();
+  };
+  const server = http.createServer((req, res) => {
+    handle(req, res).catch((err) => {
+      const status = err instanceof HttpError ? err.status : 500;
+      const message = err instanceof HttpError ? err.message : "Proxy error";
+      log(`${req.method ?? "GET"} ${(req.url ?? "/").split("?")[0]} -> ${status} ${message}`);
+      if (status === 413) req.resume();
+      sendError(res, status, message);
+    });
+  });
+  await new Promise((resolve2, reject) => {
+    server.once("error", reject);
+    server.listen(options.port ?? 8787, LOOPBACK_HOST, () => {
+      server.off("error", reject);
+      resolve2();
+    });
+  });
+  const { address, port } = server.address();
+  return {
+    server,
+    vault,
+    address,
+    port,
+    url: `http://${LOOPBACK_HOST}:${port}`,
+    close: () => new Promise((resolve2) => {
+      server.closeAllConnections();
+      server.close(() => resolve2());
+    })
+  };
+}
 
 exports.CREDENTIAL_PATTERNS = CREDENTIAL_PATTERNS;
 exports.DEFAULT_PATTERNS = DEFAULT_PATTERNS;
@@ -1725,6 +1966,7 @@ exports.resolvePresets = resolvePresets;
 exports.sendgridApiKeyPattern = sendgridApiKeyPattern;
 exports.slackTokenPattern = slackTokenPattern;
 exports.ssnPattern = ssnPattern;
+exports.startProxy = startProxy;
 exports.stripeKeyPattern = stripeKeyPattern;
 exports.supabaseKeyPattern = supabaseKeyPattern;
 exports.telegramBotTokenPattern = telegramBotTokenPattern;

@@ -31,6 +31,10 @@ export type { EntropyConfig } from './core/entropy.js';
 export { wrapAgent, createExpressMiddleware } from './middleware/index.js';
 export type { AgentInterceptorOptions, RedactRequestExtension } from './middleware/index.js';
 
+// Local redacting proxy for the Anthropic / OpenAI APIs (`agent-redact proxy`)
+export { startProxy } from './proxy/server.js';
+export type { ProxyOptions, ProxyProvider, RunningProxy } from './proxy/server.js';
+
 // Types
 export type {
   SecretCategory,

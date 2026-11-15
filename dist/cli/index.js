@@ -7,6 +7,9 @@ import { z } from 'zod';
 import { homedir, tmpdir } from 'os';
 import { createDecipheriv, randomBytes, createCipheriv, scryptSync, createHash, randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
+import { createServer } from 'http';
+import 'stream';
+import 'string_decoder';
 
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -2410,6 +2413,629 @@ async function runServe(args, input = process.stdin, output = process.stdout, er
   return 0;
 }
 
+// src/cli/proxy.ts
+init_presets();
+
+// src/proxy/server.ts
+init_vault();
+
+// src/core/deep.ts
+init_engine();
+init_vault();
+var isPlainObject = (v) => {
+  if (typeof v !== "object" || v === null) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+};
+function isToolUnmaskAllowed(policy, toolName) {
+  if (policy === true) return true;
+  if (typeof policy === "function") return policy(toolName);
+  return false;
+}
+var nameOf = (parent) => {
+  for (const k of ["name", "toolName", "tool_name"]) {
+    if (typeof parent[k] === "string") return parent[k];
+  }
+  return "";
+};
+function toolInputSlot(key, parent) {
+  const type = typeof parent["type"] === "string" ? parent["type"] : "";
+  if (key === "arguments" || key === "args" || key === "partial_json") return nameOf(parent);
+  if ((key === "input" || key === "parameters") && (/tool|function/i.test(type) || "toolName" in parent)) {
+    return nameOf(parent);
+  }
+  if (key === "delta" && /function_call_arguments/i.test(type)) return "";
+  return null;
+}
+var BASE64_RE = /^[A-Za-z0-9+/_-]*={0,2}$/;
+var TEXT_MIME_RE = /^(?:text\/|application\/(?:json|xml|yaml|x-yaml|toml|x-toml|javascript|ecmascript|x-sh|x-shellscript|sql|csv|x-ndjson)\b)|\+(?:json|xml)\b/i;
+function findBase64Payload(value, key, parent) {
+  const dataUrl = /^data:([^;,]*)((?:;[^;,]*)*);base64,/i.exec(value.slice(0, 512));
+  if (dataUrl) {
+    const head = dataUrl[0];
+    return { mime: dataUrl[1] || void 0, encoded: value.slice(head.length), rebuild: (e) => head + e };
+  }
+  if (key === "data" && parent && (parent["type"] === "base64" || "media_type" in parent || "mime_type" in parent)) {
+    const mime = parent["media_type"] ?? parent["mime_type"];
+    return { mime: typeof mime === "string" ? mime : void 0, encoded: value, rebuild: (e) => e };
+  }
+  return null;
+}
+function mapStrings(value, fn, skipProp, seen = /* @__PURE__ */ new WeakMap(), key, parent) {
+  if (typeof value === "string") return fn(value, key, parent);
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return seen.get(value);
+    const out = [];
+    seen.set(value, out);
+    for (const item of value) out.push(mapStrings(item, fn, skipProp, seen, key, parent));
+    return out;
+  }
+  if (isPlainObject(value)) {
+    if (seen.has(value)) return seen.get(value);
+    const out = {};
+    seen.set(value, out);
+    for (const [k, v] of Object.entries(value)) {
+      const decision = skipProp(k, value);
+      out[k] = decision === "skip" ? v : mapStrings(v, fn, decision === "all" ? () => void 0 : skipProp, seen, k, value);
+    }
+    return out;
+  }
+  return value;
+}
+function redactDeep(value, options = {}) {
+  const { vault = new Vault(), skipKeys = [], ...redactOptions } = options;
+  const reversible = redactOptions.reversible ?? true;
+  const skip = new Set(skipKeys);
+  const stats = {};
+  let totalLeaks = 0;
+  const scan = (s) => {
+    const res = redact(s, { ...redactOptions, reversible, vault });
+    totalLeaks += res.totalLeaks;
+    for (const [id, n] of Object.entries(res.stats)) stats[id] = (stats[id] ?? 0) + n;
+    return res.text;
+  };
+  const out = mapStrings(
+    value,
+    (s, key, parent) => {
+      const payload = findBase64Payload(s, key, parent);
+      if (payload) {
+        const compact = payload.encoded.replace(/\r?\n/g, "");
+        if (BASE64_RE.test(compact)) {
+          const bytes = Buffer.from(compact, "base64");
+          const textual = payload.mime !== void 0 && TEXT_MIME_RE.test(payload.mime) || !bytes.includes(0);
+          if (!textual) return s;
+          const decoded = bytes.toString("utf8");
+          const redacted = scan(decoded);
+          return redacted === decoded ? s : payload.rebuild(Buffer.from(redacted, "utf8").toString("base64"));
+        }
+      }
+      return scan(s);
+    },
+    (k) => skip.has(k) ? "skip" : void 0
+  );
+  return { value: out, vault, totalLeaks, stats };
+}
+function unmaskDeep(value, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
+  return mapStrings(
+    value,
+    (s) => vault.unmask(s),
+    (k, parent) => {
+      const tool = toolInputSlot(k, parent);
+      if (tool === null) return void 0;
+      return isToolUnmaskAllowed(policy, tool) ? "all" : "skip";
+    }
+  );
+}
+var jsonStringEscape = (secret) => JSON.stringify(secret).slice(1, -1);
+var StreamingUnmasker = class {
+  constructor(vault, encode) {
+    this.vault = vault;
+    this.encode = encode;
+  }
+  vault;
+  encode;
+  pending = "";
+  /** Feeds the next chunk and returns the text that is safe to emit now */
+  push(chunk) {
+    const text = this.pending + chunk;
+    this.pending = "";
+    const hold = this.holdStart(text);
+    if (hold === -1) {
+      return this.vault.unmask(text, this.encode);
+    }
+    this.pending = text.slice(hold);
+    return this.vault.unmask(text.slice(0, hold), this.encode);
+  }
+  /** Returns everything still buffered (call once the stream has ended) */
+  flush() {
+    const rest = this.pending;
+    this.pending = "";
+    return this.vault.unmask(rest, this.encode);
+  }
+  holdStart(text) {
+    const open = text.lastIndexOf("[");
+    if (open === -1) return -1;
+    const tail = text.slice(open);
+    if (tail.includes("]")) return -1;
+    return this.vault.hasPlaceholderPrefix(tail) ? open : -1;
+  }
+};
+var ANTHROPIC_ENVELOPE_EVENTS = /* @__PURE__ */ new Set([
+  "message_start",
+  "content_block_start",
+  "content_block_stop",
+  "message_delta",
+  "message_stop",
+  "ping"
+]);
+var isObject2 = (v) => typeof v === "object" && v !== null;
+function getOrCreate(map, key, create) {
+  let value = map.get(key);
+  if (value === void 0) {
+    value = create();
+    map.set(key, value);
+  }
+  return value;
+}
+async function* unmaskAnthropicStream(events, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
+  const text = /* @__PURE__ */ new Map();
+  const json = /* @__PURE__ */ new Map();
+  const toolNames = /* @__PURE__ */ new Map();
+  function* flushBlock(index) {
+    const t = text.get(index)?.flush();
+    if (t) yield { type: "content_block_delta", index, delta: { type: "text_delta", text: t } };
+    const j = json.get(index)?.flush();
+    if (j) yield { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: j } };
+    text.delete(index);
+    json.delete(index);
+  }
+  for await (const event of events) {
+    const e = event;
+    if (isObject2(e) && e["type"] === "content_block_start" && isObject2(e["content_block"])) {
+      const block = e["content_block"];
+      if (block["type"] === "tool_use") toolNames.set(Number(e["index"] ?? 0), String(block["name"] ?? ""));
+    }
+    if (isObject2(e) && e["type"] === "content_block_delta" && isObject2(e["delta"])) {
+      const index = Number(e["index"] ?? 0);
+      const delta = e["delta"];
+      if (delta["type"] === "text_delta" && typeof delta["text"] === "string") {
+        const out = getOrCreate(text, index, () => new StreamingUnmasker(vault)).push(delta["text"]);
+        yield { ...e, delta: { ...delta, text: out } };
+        continue;
+      }
+      if (delta["type"] === "input_json_delta" && typeof delta["partial_json"] === "string") {
+        if (!isToolUnmaskAllowed(policy, toolNames.get(index) ?? "")) {
+          yield { ...e, delta: { ...delta } };
+          continue;
+        }
+        const out = getOrCreate(json, index, () => new StreamingUnmasker(vault, jsonStringEscape)).push(
+          delta["partial_json"]
+        );
+        yield { ...e, delta: { ...delta, partial_json: out } };
+        continue;
+      }
+    }
+    if (isObject2(e) && e["type"] === "content_block_stop") {
+      yield* flushBlock(Number(e["index"] ?? 0));
+    }
+    if (isObject2(e) && e["type"] === "message_stop") {
+      for (const index of /* @__PURE__ */ new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
+    }
+    if (isObject2(e) && typeof e["type"] === "string" && ANTHROPIC_ENVELOPE_EVENTS.has(e["type"])) {
+      yield unmaskDeep(event, vault, { unmaskToolInputs: policy });
+    } else {
+      yield event;
+    }
+  }
+  for (const index of /* @__PURE__ */ new Set([...text.keys(), ...json.keys()])) yield* flushBlock(index);
+}
+async function* unmaskOpenAIStream(chunks, vault, options = {}) {
+  const policy = options.unmaskToolInputs;
+  const content = /* @__PURE__ */ new Map();
+  const args = /* @__PURE__ */ new Map();
+  const toolNames = /* @__PURE__ */ new Map();
+  for await (const chunk of chunks) {
+    const c = chunk;
+    if (!isObject2(c) || !Array.isArray(c["choices"])) {
+      yield chunk;
+      continue;
+    }
+    const choices = c["choices"].map((choice) => {
+      if (!isObject2(choice) || !isObject2(choice["delta"])) return choice;
+      const index = Number(choice["index"] ?? 0);
+      const delta = { ...choice["delta"] };
+      const finished = choice["finish_reason"] != null;
+      if (typeof delta["content"] === "string" || finished && content.has(index)) {
+        const u = getOrCreate(content, index, () => new StreamingUnmasker(vault));
+        let out = typeof delta["content"] === "string" ? u.push(delta["content"]) : "";
+        if (finished) out += u.flush();
+        if (typeof delta["content"] === "string" || out) delta["content"] = out;
+      }
+      const toolCalls = Array.isArray(delta["tool_calls"]) ? [...delta["tool_calls"]] : [];
+      const mapped = toolCalls.map((tc) => {
+        if (!isObject2(tc) || !isObject2(tc["function"]) || typeof tc["function"]["arguments"] !== "string") {
+          return tc;
+        }
+        const key = `${index}:${Number(tc["index"] ?? 0)}`;
+        if (typeof tc["function"]["name"] === "string") toolNames.set(key, tc["function"]["name"]);
+        if (!isToolUnmaskAllowed(policy, toolNames.get(key) ?? "")) {
+          return { ...tc, function: { ...tc["function"] } };
+        }
+        const u = getOrCreate(args, key, () => new StreamingUnmasker(vault, jsonStringEscape));
+        return { ...tc, function: { ...tc["function"], arguments: u.push(tc["function"]["arguments"]) } };
+      });
+      if (finished) {
+        for (const [key, u] of args) {
+          if (!key.startsWith(`${index}:`)) continue;
+          const rest = u.flush();
+          if (rest) mapped.push({ index: Number(key.split(":")[1]), function: { arguments: rest } });
+          args.delete(key);
+        }
+        content.delete(index);
+      }
+      if (mapped.length > 0) delta["tool_calls"] = mapped;
+      return { ...choice, delta };
+    });
+    yield { ...c, choices };
+  }
+  const trailing = [];
+  for (const [index, u] of content) {
+    const rest = u.flush();
+    if (rest) trailing.push({ index, delta: { content: rest }, finish_reason: null });
+  }
+  for (const [key, u] of args) {
+    const rest = u.flush();
+    if (!rest) continue;
+    const [choiceIndex, toolIndex] = key.split(":").map(Number);
+    trailing.push({ index: choiceIndex, delta: { tool_calls: [{ index: toolIndex, function: { arguments: rest } }] }, finish_reason: null });
+  }
+  if (trailing.length > 0) yield { choices: trailing };
+}
+
+// src/proxy/server.ts
+var DEFAULT_UPSTREAM = {
+  anthropic: "https://api.anthropic.com",
+  openai: "https://api.openai.com"
+};
+var DEFAULT_MAX_BODY = 32 * 1024 * 1024;
+var HOP_BY_HOP = /* @__PURE__ */ new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+  "content-length",
+  "accept-encoding"
+]);
+var LOOPBACK_HOST = [127, 0, 0, 1].join(".");
+var IPV6_LOOPBACK2 = ["", "", "1"].join(":");
+var LOOPBACK = /* @__PURE__ */ new Set([LOOPBACK_HOST, "localhost", `[${IPV6_LOOPBACK2}]`, IPV6_LOOPBACK2]);
+function upstreamBase(upstream) {
+  let url;
+  try {
+    url = new URL(upstream);
+  } catch {
+    throw new Error(`Invalid upstream URL: ${upstream}`);
+  }
+  const ok = url.protocol === "https:" || url.protocol === "http:" && LOOPBACK.has(url.hostname);
+  if (!ok) throw new Error("The upstream must use https (plain http is only allowed for loopback addresses)");
+  return url.origin + url.pathname.replace(/\/+$/, "");
+}
+var HttpError = class extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+  status;
+};
+async function readBody(req, limit) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw new HttpError(413, `Request body exceeds ${limit} bytes`);
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+function sendError(res, status, message) {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify({ type: "error", error: { type: "agent_redact_proxy_error", message } }));
+}
+async function* readSse(body) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const parse = (block) => {
+    let event;
+    const data = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line === "" || line.startsWith(":")) continue;
+      const colon = line.indexOf(":");
+      const field = colon === -1 ? line : line.slice(0, colon);
+      const value = colon === -1 ? "" : line.slice(colon + 1).replace(/^ /, "");
+      if (field === "event") event = value;
+      else if (field === "data") data.push(value);
+    }
+    return data.length > 0 ? { event, data: data.join("\n") } : null;
+  };
+  for await (const chunk of body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let match;
+    while (match = /\r?\n\r?\n/.exec(buffer)) {
+      const ev = parse(buffer.slice(0, match.index));
+      buffer = buffer.slice(match.index + match[0].length);
+      if (ev) yield ev;
+    }
+  }
+  buffer += decoder.decode();
+  const last = parse(buffer);
+  if (last) yield last;
+}
+var RAW = /* @__PURE__ */ Symbol("raw-sse-event");
+function formatSse(event, data) {
+  const lines = data.split("\n").map((l) => `data: ${l}`);
+  return `${event ? `event: ${event}
+` : ""}${lines.join("\n")}
+
+`;
+}
+async function* unmaskSse(body, provider, vault, unmaskToolInputs) {
+  let done = false;
+  async function* parsed() {
+    for await (const ev of readSse(body)) {
+      if (provider === "openai" && ev.data.trim() === "[DONE]") {
+        done = true;
+        return;
+      }
+      try {
+        yield JSON.parse(ev.data);
+      } catch {
+        yield { [RAW]: ev };
+      }
+    }
+  }
+  const adapter = provider === "anthropic" ? unmaskAnthropicStream : unmaskOpenAIStream;
+  for await (const item of adapter(parsed(), vault, { unmaskToolInputs })) {
+    if (typeof item === "object" && item !== null && RAW in item) {
+      const raw = item[RAW];
+      yield formatSse(raw.event, raw.data);
+      continue;
+    }
+    const type = provider === "anthropic" && typeof item?.type === "string" ? item.type : void 0;
+    yield formatSse(type, JSON.stringify(item));
+  }
+  if (done) yield "data: [DONE]\n\n";
+}
+function describeStats(stats) {
+  const parts = Object.entries(stats).map(([id, n]) => `${id}:${n}`);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+async function startProxy(options) {
+  const provider = options.provider;
+  if (provider !== "anthropic" && provider !== "openai") throw new Error('provider must be "anthropic" or "openai"');
+  const base = upstreamBase(options.upstream ?? DEFAULT_UPSTREAM[provider]);
+  const maxBody = options.maxBodyBytes ?? DEFAULT_MAX_BODY;
+  const vault = new Vault();
+  const log = options.log ?? (() => {
+  });
+  const policy = options.unmaskToolInputs;
+  const handle = async (req, res) => {
+    const path = req.url ?? "/";
+    const method = req.method ?? "GET";
+    if (!path.startsWith("/")) throw new HttpError(400, "Only origin-form request paths are accepted");
+    if (req.headers.origin !== void 0) throw new HttpError(403, "Browser requests are not allowed");
+    const host = String(req.headers.host ?? "");
+    const hostname = host.startsWith("[") ? host.slice(0, host.indexOf("]") + 1) : host.split(":")[0];
+    if (!LOOPBACK.has(hostname.toLowerCase())) throw new HttpError(403, "Requests must address the proxy by its loopback address");
+    const raw = await readBody(req, maxBody);
+    let body;
+    let redacted = 0;
+    let stats = {};
+    if (raw.length > 0) {
+      const encoding = String(req.headers["content-encoding"] ?? "identity").toLowerCase();
+      if (encoding !== "identity") throw new HttpError(415, "Compressed request bodies are not supported");
+      if (!/^application\/(?:[\w.+-]+\+)?json\b/i.test(String(req.headers["content-type"] ?? ""))) {
+        throw new HttpError(415, "Only JSON request bodies are accepted");
+      }
+      let value;
+      try {
+        value = JSON.parse(raw.toString("utf8"));
+      } catch {
+        throw new HttpError(400, "Malformed JSON request body");
+      }
+      const result = redactDeep(value, { ...options.redactOptions, vault, skipKeys: ["signature"] });
+      body = JSON.stringify(result.value);
+      redacted = result.totalLeaks;
+      stats = result.stats;
+    }
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(req.headers)) {
+      if (value === void 0 || HOP_BY_HOP.has(name.toLowerCase())) continue;
+      for (const v of Array.isArray(value) ? value : [value]) headers.append(name, v);
+    }
+    headers.set("accept-encoding", "identity");
+    const abort = new AbortController();
+    res.on("close", () => abort.abort());
+    let upstream;
+    try {
+      upstream = await fetch(base + path, { method, headers, body, redirect: "manual", signal: abort.signal });
+    } catch {
+      throw new HttpError(502, "Upstream request failed");
+    }
+    const outHeaders = {};
+    upstream.headers.forEach((value, name) => {
+      if (!HOP_BY_HOP.has(name) && name !== "content-encoding" && !name.startsWith("access-control-")) outHeaders[name] = value;
+    });
+    const contentType = upstream.headers.get("content-type") ?? "";
+    log(`${method} ${path.split("?")[0]} -> ${upstream.status} redacted=${redacted}${describeStats(stats)}`);
+    if (/text\/event-stream/i.test(contentType) && upstream.body) {
+      res.writeHead(upstream.status, outHeaders);
+      for await (const chunk of unmaskSse(upstream.body, provider, vault, policy)) {
+        if (!res.write(chunk)) await new Promise((r) => res.once("drain", r));
+      }
+      res.end();
+      return;
+    }
+    if (/json/i.test(contentType)) {
+      const text = await upstream.text();
+      let out = text;
+      try {
+        out = JSON.stringify(unmaskDeep(JSON.parse(text), vault, { unmaskToolInputs: policy }));
+      } catch {
+      }
+      res.writeHead(upstream.status, outHeaders);
+      res.end(out);
+      return;
+    }
+    res.writeHead(upstream.status, outHeaders);
+    if (upstream.body) {
+      for await (const chunk of upstream.body) {
+        if (!res.write(chunk)) await new Promise((r) => res.once("drain", r));
+      }
+    }
+    res.end();
+  };
+  const server = createServer((req, res) => {
+    handle(req, res).catch((err) => {
+      const status = err instanceof HttpError ? err.status : 500;
+      const message = err instanceof HttpError ? err.message : "Proxy error";
+      log(`${req.method ?? "GET"} ${(req.url ?? "/").split("?")[0]} -> ${status} ${message}`);
+      if (status === 413) req.resume();
+      sendError(res, status, message);
+    });
+  });
+  await new Promise((resolve5, reject) => {
+    server.once("error", reject);
+    server.listen(options.port ?? 8787, LOOPBACK_HOST, () => {
+      server.off("error", reject);
+      resolve5();
+    });
+  });
+  const { address, port } = server.address();
+  return {
+    server,
+    vault,
+    address,
+    port,
+    url: `http://${LOOPBACK_HOST}:${port}`,
+    close: () => new Promise((resolve5) => {
+      server.closeAllConnections();
+      server.close(() => resolve5());
+    })
+  };
+}
+
+// src/cli/proxy.ts
+var USAGE = `Usage: agent-redact proxy --provider <anthropic|openai> [options]
+
+  --provider <name>            anthropic or openai (required)
+  --port <n>                   Port on the loopback address (default 8787, 0 = any free port)
+  --upstream <url>             Upstream API base (default: the provider's public API; https only)
+  --unmask-tool-inputs <list>  Comma-separated tool names whose inputs get real secrets back
+                               ("*" for all). Default: tool inputs stay masked.
+  --preset <a,b>               Enable opt-in presets (e.g. vn-pii)
+  --entropy                    Also redact high-entropy tokens
+  --config <path>              Configuration file
+`;
+var VALUE_FLAGS = /* @__PURE__ */ new Set(["--provider", "--port", "--upstream", "--unmask-tool-inputs", "--preset", "--config"]);
+async function runProxyCli(args) {
+  const values = /* @__PURE__ */ new Map();
+  let entropy = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "-h" || arg === "--help") {
+      process.stdout.write(USAGE);
+      return 0;
+    }
+    if (arg === "--entropy") {
+      entropy = true;
+      continue;
+    }
+    const value = args[i + 1];
+    if (!VALUE_FLAGS.has(arg) || value === void 0 || value.startsWith("--")) {
+      process.stderr.write(`Error: unexpected argument "${arg}"
+
+${USAGE}`);
+      return 2;
+    }
+    values.set(arg, value);
+    i++;
+  }
+  const provider = values.get("--provider");
+  if (provider !== "anthropic" && provider !== "openai") {
+    process.stderr.write(`Error: --provider must be "anthropic" or "openai"
+
+${USAGE}`);
+    return 2;
+  }
+  const port = Number(values.get("--port") ?? 8787);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    process.stderr.write("Error: --port must be an integer between 0 and 65535\n");
+    return 2;
+  }
+  const toolList = (values.get("--unmask-tool-inputs") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const unmaskToolInputs = toolList.includes("*") ? true : toolList.length ? (name) => toolList.includes(name) : false;
+  let redactOptions;
+  try {
+    const config = loadConfig(values.get("--config"));
+    const presets = [...config?.presets ?? [], ...(values.get("--preset") ?? "").split(",").map((s) => s.trim()).filter(Boolean)];
+    resolvePresets(presets);
+    redactOptions = {
+      include: config?.include,
+      exclude: config?.exclude,
+      allowlist: config?.allowlist,
+      customPatterns: config?.customPatterns,
+      detectHighEntropy: entropy || (config?.detectHighEntropy ?? false),
+      presets,
+      entropy: config?.entropy
+    };
+  } catch (err) {
+    process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}
+`);
+    return 2;
+  }
+  let proxy;
+  try {
+    proxy = await startProxy({
+      provider,
+      upstream: values.get("--upstream"),
+      port,
+      unmaskToolInputs,
+      redactOptions,
+      log: (line) => process.stderr.write(`[agent-redact proxy] ${line}
+`)
+    });
+  } catch (err) {
+    process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}
+`);
+    return 1;
+  }
+  const env = provider === "anthropic" ? `ANTHROPIC_BASE_URL=${proxy.url}` : `OPENAI_BASE_URL=${proxy.url}/v1`;
+  process.stderr.write(
+    `[agent-redact proxy] listening on ${proxy.url} (${provider}); tool inputs ${unmaskToolInputs === false ? "stay masked" : `restored for: ${toolList.join(", ")}`}
+[agent-redact proxy] point your client at it: ${env}
+`
+  );
+  await new Promise((resolve5) => {
+    const stop = () => resolve5();
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  await proxy.close();
+  return 0;
+}
+
 // src/cli/index.ts
 function writeSecureFile(filePath, content) {
   writeFileSync(filePath, content, { encoding: "utf-8", mode: 384 });
@@ -2497,6 +3123,7 @@ ${colors.bold}USAGE:${colors.reset}
   npx agent-redact mcp                      Start Model Context Protocol (MCP) server
   npx agent-redact hook [--block-writes]    Claude Code hook (reads hook JSON on stdin)
   npx agent-redact serve --stdio            Long-lived JSON-RPC worker on stdin/stdout (Python package)
+  npx agent-redact proxy --provider <name>  Local redacting proxy for the Anthropic/OpenAI API (see proxy --help)
 
 ${colors.bold}SCAN OPTIONS:${colors.reset}
   --format <text|json|sarif>  Report format (json/sarif go to stdout or --report)
@@ -2556,6 +3183,10 @@ async function main() {
   if (args[0] === "hook") {
     process.exit(await runHook(args.slice(1)));
   }
+  if (args[0] === "proxy") {
+    process.exitCode = await runProxyCli(args.slice(1));
+    return;
+  }
   if (args[0] === "serve") {
     process.exitCode = await runServe(args.slice(1));
     return;
@@ -2568,7 +3199,7 @@ async function main() {
     console.log(`agent-redact v${VERSION2}`);
     process.exit(0);
   }
-  const VALUE_FLAGS = /* @__PURE__ */ new Set([
+  const VALUE_FLAGS2 = /* @__PURE__ */ new Set([
     "-o",
     "--output",
     "--vault-out",
@@ -2602,7 +3233,7 @@ async function main() {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg.startsWith("-")) {
-      if (VALUE_FLAGS.has(arg)) {
+      if (VALUE_FLAGS2.has(arg)) {
         const val = args[i + 1];
         if (!val || val.startsWith("-")) {
           console.error(`${colors.red}Error:${colors.reset} Flag "${arg}" requires a file argument.`);
