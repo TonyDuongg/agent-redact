@@ -4,10 +4,10 @@
 [![npm version](https://img.shields.io/npm/v/agent-redact.svg?style=flat&color=3178c6)](https://www.npmjs.com/package/agent-redact)
 [![PyPI version](https://img.shields.io/pypi/v/agent-redact.svg?style=flat&color=3776ab)](https://pypi.org/project/agent-redact/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
+[![Core engine dependencies](https://img.shields.io/badge/core%20engine%20deps-0-brightgreen)](CONTRIBUTING.md#-coding-conventions)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.18.0-blue)](package.json)
 
-> **Universal zero-latency, zero-leak secret & PII redactor for ALL AI Agents, LLMs, and Multi-Agent Workflows.**
+> **Fast, local secret & PII redactor for all AI agents, LLMs and multi-agent workflows.**
 
 Developers and autonomous AI agents (**Claude Code, Cursor, OpenAI, DeepSeek, Google Gemini, Ollama, LangChain, AutoGen, CrewAI**) frequently pipe local logs, source code, `.env` files, and database dumps directly into model prompt contexts. Unintentional leaks of credentials (Anthropic keys, OpenAI tokens, AWS keys, Stripe secrets, JWTs, database URLs) are catastrophic.
 
@@ -456,7 +456,7 @@ Other languages can pipe text through the CLI: `agent-redact --json` on stdin re
 
 ### 9. Docker & Container Workflows
 
-Add zero-latency secret screening to your Docker container pipelines:
+Add secret screening to your Docker container pipelines:
 
 ```dockerfile
 # Run directly in any Node.js container
@@ -677,34 +677,32 @@ npm run bench
 
 ## 🗺️ Roadmap & Milestones
 
-* [x] **v1.0 (Core Engine & Advanced CLI)**:
-  * High-performance single-pass regex scanner for 20+ secret categories.
-  * Conflict resolution algorithm based on token severity.
-  * Interactive CLI with color badges, in-place editing, and file piping.
-  * Dual ESM/CJS build targeting Node.js 22.18+ (20+ until 0.2.x).
-  * Zero runtime dependencies for core engine.
-* [x] **v1.1 (Reversible Session Vault)**:
-  * In-memory Vault with bidirectional placeholder substitution.
-  * CLI `--vault-out` and `--unmask` persistence.
-* [x] **v1.2 (Model Context Protocol Integration)**:
-  * Official **Model Context Protocol (MCP)** server for Claude Desktop, Cursor, Windsurf.
-  * 6 dedicated tools: `redact_text`, `unmask_text`, `scan_file`, `get_vault_status`, `clear_vault`, `list_supported_patterns`.
-* [x] **v1.3 (Universal Agent Interceptors & Stream Processing)**:
-  * `wrapAgent`: Framework-agnostic wrapper for OpenAI, DeepSeek, Gemini, Ollama, LangChain.
-  * `createExpressMiddleware`: Express / Fastify / Node HTTP request body sanitizer.
-  * `createRedactStream`: Node.js Transform stream for continuous log sanitization with line-bounded memory.
-* [x] **v1.4 (Customization & Shannon Entropy Heuristics)**:
-  * `.agentredactrc` / `agent-redact.config.json` configuration file loader.
-  * Custom regex patterns and allowlist/whitelist exemption engine.
-  * Shannon Entropy calculator ($H \ge 4.3$) for zero-day generic cryptographic keys.
-* [x] **v1.5 (CI/CD Ecosystem & GitHub Action)**:
-  * Official GitHub Action (`action.yml`) with in-PR file & line annotations.
-  * Markdown Step Summary table in GitHub Actions runner.
-  * `.pre-commit-hooks.yaml` for pre-commit git hooks.
-* [ ] **v1.6 (NPM Public Distribution & Multi-OS CI)**:
-  * Official public publishing to npm registry (`npm install agent-redact`).
-  * Cross-platform support (Ubuntu, Windows, macOS) across Node.js 22, 24, and 26.
-  * GitHub Release with automated verification and security audit conformance.
+Released (details in [CHANGELOG.md](CHANGELOG.md)):
+
+* [x] **v0.1.x: core engine, CLI and integrations**
+  * Single-pass regex scanner with severity-based overlap resolution, CLI with in-place editing and piping, dual ESM/CJS build.
+  * Reversible in-memory `Vault`, CLI `--vault-out` / `--unmask`.
+  * MCP server with 6 tools: `redact_text`, `unmask_text`, `scan_file`, `get_vault_status`, `clear_vault`, `list_supported_patterns`.
+  * `wrapAgent`, Express/Connect middleware, `createRedactStream`.
+  * Config files, custom patterns, allowlists and Shannon-entropy detection.
+  * GitHub Action with annotations and step summary, `.pre-commit-hooks.yaml`, npm publishing.
+* [x] **v0.2.0: scale and agent workflows**
+  * Linear-time scanning, streaming unmask for the Anthropic and OpenAI SDKs, tool-input exfiltration guard.
+  * Repository scanning with SARIF and baselines, Claude Code hook, encrypted vaults.
+  * `vn-pii` preset, AI provider keys, Python package.
+* [x] **v0.3.0: platform refresh**
+  * Node.js 22.18+, Vitest 5 / tsup 9 / TypeScript 7.
+  * xAI and Replicate keys containing `_` / `-` are detected; real-key verification script.
+  * Python package on PyPI via Trusted Publishing.
+
+Planned (ideas, not commitments):
+
+* [ ] **v0.4: no-code integration**
+  * Long-lived worker for the Python package: one Node process per session instead of one per call.
+  * `agent-redact proxy`: a local proxy for the Anthropic/OpenAI APIs, enabled by setting `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`.
+* [ ] **v0.5: precision**
+  * MCP `read_file_redacted`, so agents can work with secret-bearing files instead of being blocked.
+  * Context-aware generic secrets (`password=`, `.npmrc`, `.netrc`, Kubernetes secrets), coverage report against public scanner rules, published precision/recall benchmark.
 
 ---
 

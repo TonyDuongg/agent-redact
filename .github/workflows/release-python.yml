@@ -131,6 +131,9 @@ jobs:
           test "$(ls python/dist | wc -l)" -eq 2
           test -f "python/dist/agent_redact-$VERSION-py3-none-any.whl"
           test -f "python/dist/agent_redact-$VERSION.tar.gz"
+          python -m zipfile -l "python/dist/agent_redact-$VERSION-py3-none-any.whl" \
+            | grep -q "agent_redact-$VERSION.dist-info/licenses/LICENSE"
+          tar -tzf "python/dist/agent_redact-$VERSION.tar.gz" | grep -qx "agent_redact-$VERSION/LICENSE"
 
           # Install the wheel into a clean venv and run it from outside the repository,
           # so the import cannot pick up python/src by accident.
