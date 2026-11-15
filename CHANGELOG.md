@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠️ Upgrade notes (behavior changes)
+- **Python package uses a long-lived worker by default.** All calls go to one `agent-redact serve --stdio` process per Python process. The CLI must therefore be **0.4 or newer and exactly the same version** as the Python package; a mismatch raises `AgentRedactError`. Set `AGENT_REDACT_TRANSPORT=subprocess` for the previous per-call behavior.
+- **`Session` vaults live in the worker's memory**, no longer in an encrypted temporary file (unless `AGENT_REDACT_TRANSPORT=subprocess`). If the worker dies or restarts, every later call on that `Session` raises instead of returning mis-numbered or unmasked text.
+
+### ⚡ Python package: about 500× faster calls
+- **`agent-redact serve --stdio`:** newline-delimited JSON-RPC 2.0 on stdin/stdout. Methods: `version`, `redact`, `unmask`, `session.open`, `session.close`. It has no network listener, so no other process can connect.
+  - Session vaults are in memory only.
+  - stdout carries protocol lines only.
+  - Messages over 64 MB end the worker with an error (fail closed). Malformed requests get JSON-RPC errors, and the worker keeps serving.
+  - The result shape of `redact` is identical to `--json`, without secret values.
+- **Python:** `redact()` and `Session` use one worker per process, started on first use and serialized with a lock for threads. The worker is restarted when it dies or `AGENT_REDACT_CLI`/`PATH` change, and must report the same version as the package.
+  - Timeouts, crashes and malformed responses kill the worker and raise.
+  - Measured on Windows: **495 ms → 0.95 ms** per `redact()`, and 1.05 ms for a `Session` redact + unmask round-trip.
+  - `scan()` still starts the CLI per call, because it reads files and git.
+- **Tests:** `tests/serve.test.ts` (8) and `python/tests/test_worker.py` (11). They cover:
+  - parity with `--json` and the subprocess transport;
+  - in-memory sessions with nothing written to disk;
+  - fail-closed behavior after a crash, on timeout, on version mismatch and on oversized input;
+  - concurrent threads, and a speed bound.
+
 ### 🔧 Tooling
 - **Dependabot ignores major updates of `@types/node`.** The typings follow the minimum supported Node.js major in `engines.node` (22), so code cannot use APIs that Node 22 lacks. `tests/supply-chain.test.ts` checks both the ignore rule and the `@types/node` range.
 

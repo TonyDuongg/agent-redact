@@ -18,6 +18,7 @@ import {
   type ScanOutcome
 } from './scan.js';
 import { runHook } from './hook.js';
+import { runServe } from './serve.js';
 
 function writeSecureFile(filePath: string, content: string): void {
   writeFileSync(filePath, content, { encoding: 'utf-8', mode: 0o600 });
@@ -119,6 +120,7 @@ ${colors.bold}USAGE:${colors.reset}
   npx agent-redact --staged                 Scan what is staged for commit (git index)
   npx agent-redact mcp                      Start Model Context Protocol (MCP) server
   npx agent-redact hook [--block-writes]    Claude Code hook (reads hook JSON on stdin)
+  npx agent-redact serve --stdio            Long-lived JSON-RPC worker on stdin/stdout (Python package)
 
 ${colors.bold}SCAN OPTIONS:${colors.reset}
   --format <text|json|sarif>  Report format (json/sarif go to stdout or --report)
@@ -181,6 +183,12 @@ async function main(): Promise<void> {
 
   if (args[0] === 'hook') {
     process.exit(await runHook(args.slice(1)));
+  }
+
+  if (args[0] === 'serve') {
+    // Set the exit code instead of calling process.exit(), so pending stdout writes are flushed
+    process.exitCode = await runServe(args.slice(1));
+    return;
   }
 
   if (args.includes('-h') || args.includes('--help')) {
