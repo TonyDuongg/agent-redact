@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### 🔧 Tooling
+- **Dependabot ignores major updates of `@types/node`.** The typings follow the minimum supported Node.js major in `engines.node` (22), so code cannot use APIs that Node 22 lacks. `tests/supply-chain.test.ts` checks both the ignore rule and the `@types/node` range.
+
+---
+
 ## [0.3.1] - 2026-11-15
 
 Maintenance release: npm Trusted Publishing, SHA-pinned actions and Dependabot, docs that match what the package does, and the license file in the Python package. No library behavior changes.
