@@ -71,7 +71,7 @@
   "homepage": "https://github.com/TonyDuongg/agent-redact#readme",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^22.13.0",
+    "@types/node": "^26.6.6",
     "tsup": "^9.0.0",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
