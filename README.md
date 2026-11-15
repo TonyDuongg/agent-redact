@@ -591,7 +591,7 @@ Prevent accidental credential commits locally using [pre-commit](https://pre-com
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/TonyDuongg/agent-redact
-    rev: v0.3.1
+    rev: v0.4.0
     hooks:
       - id: agent-redact
 ```
@@ -722,12 +722,12 @@ Released (details in [CHANGELOG.md](CHANGELOG.md)):
   * Node.js 22.18+, Vitest 5 / tsup 9 / TypeScript 7.
   * xAI and Replicate keys containing `_` / `-` are detected; real-key verification script.
   * Python package on PyPI via Trusted Publishing.
+* [x] **v0.4.0: no-code integration**
+  * Long-lived worker for the Python package (`agent-redact serve --stdio`): ~1 ms per call instead of ~0.5 s.
+  * `agent-redact proxy`: a local redacting proxy for the Anthropic/OpenAI APIs, enabled by setting `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`.
 
 Planned (ideas, not commitments):
 
-* [ ] **v0.4: no-code integration**
-  * Long-lived worker for the Python package: one Node process per Python process instead of one per call (~1 ms per call instead of ~0.5 s).
-  * `agent-redact proxy`: a local proxy for the Anthropic/OpenAI APIs, enabled by setting `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`.
 * [ ] **v0.5: precision**
   * MCP `read_file_redacted`, so agents can work with secret-bearing files instead of being blocked.
   * Context-aware generic secrets (`password=`, `.npmrc`, `.netrc`, Kubernetes secrets), coverage report against public scanner rules, published precision/recall benchmark.

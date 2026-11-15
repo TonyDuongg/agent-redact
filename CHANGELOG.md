@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.4.0] - 2026-11-15
+
+No-code integration. `agent-redact proxy` protects any Anthropic or OpenAI client through `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`, including streaming. The Python package now talks to one long-lived worker, so a call takes about 1 ms instead of about 0.5 s.
 
 ### ⚠️ Upgrade notes (behavior changes)
 - **Python package uses a long-lived worker by default.** All calls go to one `agent-redact serve --stdio` process per Python process. The CLI must therefore be **0.4 or newer and exactly the same version** as the Python package; a mismatch raises `AgentRedactError`. Set `AGENT_REDACT_TRANSPORT=subprocess` for the previous per-call behavior.

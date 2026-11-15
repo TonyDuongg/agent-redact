@@ -1299,7 +1299,7 @@ function toSarif(findings, toolVersion) {
 }
 
 // src/version.ts
-var VERSION = "0.3.1";
+var VERSION = "0.4.0";
 
 // src/action/index.ts
 function getInput(name, fallback = "") {

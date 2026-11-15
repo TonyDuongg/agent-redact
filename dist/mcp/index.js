@@ -1030,7 +1030,7 @@ function isBinaryFile(path, sampleSize = 8192) {
 }
 
 // src/version.ts
-var VERSION = "0.3.1";
+var VERSION = "0.4.0";
 
 // src/mcp/server.ts
 function realpathOrNearest(p) {
