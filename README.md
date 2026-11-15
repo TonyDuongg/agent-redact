@@ -395,18 +395,29 @@ Add to `cline_mcp_settings.json`:
 | Tool | Purpose |
 | :--- | :--- |
 | `redact_text` | Scans and redacts credentials/PII, optionally allocating reversible session placeholders |
-| `unmask_text` | Restores `[ANTHROPIC_API_KEY_1]` placeholders in agent responses back to real keys locally |
+| `read_file_redacted` | Reads a file with every secret replaced by a placeholder unique to that file, plus a `revision` |
+| `edit_file_redacted` | Edits that file in redacted space (`oldString` → `newString`); the file's own placeholders are written back as the real secrets |
+| `unmask_text` | **Opt-in** (`--allow-unmask-text`): restores placeholders into a file on disk |
 | `scan_file` | Audits and redacts sensitive content in `.env`, config, or log files before agent reads them |
 | `get_vault_status` | Inspects currently vaulted placeholders and timestamps without exposing plaintext secrets |
 | `clear_vault` | Wipes in-memory vault when session concludes |
 | `list_supported_patterns` | Queries all active secret definitions and threat levels |
 
+#### Editing files that contain secrets
+
+`read_file_redacted` + `edit_file_redacted` let an agent change `.env` files and configs without ever seeing the secrets:
+
+* Each file gets its own vault, so `[AWS_ACCESS_KEY_ID_1]` always means **this file's** key. An edit can move or remove it, but a placeholder from another file (or from `redact_text`) is refused, so secrets cannot be copied between files.
+* The edit is refused if the file changed since the last read (`revision`), or if `oldString` is missing or ambiguous (use `replaceAll`).
+* Writes are atomic, keep the file mode and CRLF line endings, and leave no backup with plaintext behind.
+* The Claude Code hook points blocked `Read`s to these tools. It lets `read_file_redacted` through and still blocks literal secrets in `edit_file_redacted` input.
+
 > [!WARNING]
-> **MCP Context Isolation**: Files written by `unmask_text` contain plaintext secrets directly on disk. Ensure your agent prompts or tool permissions prohibit reading restored files back into the model context.
+> **`unmask_text` is disabled by default since 0.5.** It can write any secret of the session into any file inside the sandbox, so a prompt-injected model could copy secrets into files that get committed or published. Enable it only if you need it: `agent-redact mcp --allow-unmask-text` (or `AGENT_REDACT_ALLOW_UNMASK_TEXT=1`). Files it writes contain plaintext secrets, so keep agents from reading them back.
 
 #### File Sandbox (`AGENT_REDACT_ALLOWED_DIR`)
 
-`scan_file` and `unmask_text` only read/write inside the server's **working directory**, the **OS temp directory**, and the directory named by `AGENT_REDACT_ALLOWED_DIR`. Symlinks/junctions are resolved before the check, and writes inside any `.git` directory are refused.
+The file tools (`scan_file`, `read_file_redacted`, `edit_file_redacted`, `unmask_text`) only read/write inside the server's **working directory**, the **OS temp directory**, and the directory named by `AGENT_REDACT_ALLOWED_DIR`. Symlinks/junctions are resolved before the check, and writes inside any `.git` directory are refused.
 
 Some MCP clients start servers with an unexpected working directory (for example `/` or the app's install folder), which would make the sandbox far broader than intended. Pin it explicitly:
 
@@ -550,7 +561,7 @@ FIXTURE_TOKEN=ghp_...
 | Event / tool | Behaviour |
 | :--- | :--- |
 | `UserPromptSubmit` | Blocks prompts that contain secrets (the prompt is not sent) |
-| `PreToolUse` → `Read` | Blocks reading a file that contains secrets (suggests the MCP `scan_file` tool for a redacted copy) |
+| `PreToolUse` → `Read` | Blocks reading a file that contains secrets (suggests the MCP `read_file_redacted` / `edit_file_redacted` tools) |
 | `PreToolUse` → `Grep` (any output mode) | Blocks when the searched files include one that contains secrets, because content output prints them and `files_with_matches`/`count` act as an oracle. Files are enumerated like ripgrep: `.gitignore` is honoured, a repo-local `core.excludesFile` is not. The agent's regex is never evaluated, and a glob only narrows the check when it is a simple `*`/`**`/`?`/`{a,b}` pattern. |
 | `PreToolUse` → `Bash` | Blocks commands that contain a literal secret, or that print a file with secrets (`cat`, `grep`, `head`, `jq`, …) |
 | `PreToolUse` → `WebFetch`, `WebSearch`, MCP tools, others | Blocks calls whose input contains secrets, or whose `path`/`file_path`/`paths` point at a file with secrets (e.g. filesystem MCP servers) |
@@ -562,7 +573,7 @@ FIXTURE_TOKEN=ghp_...
 - If an unexpected error happens, the action is blocked.
 - `agent-redact-ignore` comments are not honoured.
 - From the project `.agentredactrc`, which the agent can edit, the hook only uses settings that **add** detections (`customPatterns`, entropy). `allowlist`, `include` and `exclude` are ignored unless you point the hook at a config you control: `agent-redact hook --config ~/.config/agent-redact.json`.
-- The tools of the `agent-redact` MCP server itself (`mcp__agent-redact__*`) are trusted, so `scan_file` can still read a redacted copy.
+- The `agent-redact` MCP server's reading tools (`scan_file`, `read_file_redacted`, …) are trusted, so they can still read a redacted copy. `edit_file_redacted` may target secret files, but its input is still checked for literal secrets.
 
 Install globally (`npm i -g agent-redact`) so the hook starts fast, then add to `.claude/settings.json` (project) or `~/.claude/settings.json` (user):
 
@@ -579,7 +590,7 @@ Install globally (`npm i -g agent-redact`) so the hook starts fast, then add to 
 }
 ```
 
-> Limits: the hook sees tool **inputs**, not outputs. A command such as `env`, or a script that prints secrets indirectly, is not detected. Treat it as a strong guard rail rather than a sandbox, and combine it with the MCP `scan_file` tool and Claude Code deny rules for sensitive paths.
+> Limits: the hook sees tool **inputs**, not outputs. A command such as `env`, or a script that prints secrets indirectly, is not detected. Treat it as a strong guard rail rather than a sandbox, and combine it with the MCP `read_file_redacted` / `edit_file_redacted` tools and Claude Code deny rules for sensitive paths.
 
 ---
 

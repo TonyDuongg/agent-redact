@@ -95,7 +95,7 @@ describe('Audit round 5', () => {
     it('makes MCP unmask_text report placeholders it could not restore', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'ar-evict-'));
       dirs.push(dir);
-      const server = createMcpServer({ allowedRoots: [dir], vaultMaxEntries: 1 });
+      const server = createMcpServer({ allowedRoots: [dir], vaultMaxEntries: 1, allowUnmaskText: true });
       const [c, s] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: 'round5', version: '1' }, { capabilities: {} });
       await Promise.all([client.connect(c), server.connect(s)]);

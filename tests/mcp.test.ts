@@ -8,7 +8,7 @@ const sampleKey = (...parts: string[]) => parts.join('');
 
 describe('MCP Server Integration (Model Context Protocol)', () => {
   it('should initialize MCP server, list registered tools and execute redact/unmask roundtrip', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer({ allowUnmaskText: true });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
     const client = new Client(

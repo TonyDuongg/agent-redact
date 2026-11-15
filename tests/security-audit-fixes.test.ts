@@ -44,7 +44,7 @@ describe('Security Audit Fixes & Verification', () => {
 
   describe('3. MCP Server unmask_text & scan_file safety', () => {
     it('should safely unmask to file when outputFilePath is specified in MCP', async () => {
-      const server = createMcpServer();
+      const server = createMcpServer({ allowUnmaskText: true });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: 'test-mcp', version: '1.0.0' }, { capabilities: {} });
       await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);

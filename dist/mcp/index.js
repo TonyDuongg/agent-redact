@@ -3,7 +3,8 @@ import { fileURLToPath } from 'url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { constants, existsSync, statSync, readFileSync, realpathSync, openSync, writeFileSync, fchmodSync, closeSync, readSync } from 'fs';
+import { constants, existsSync, statSync, readFileSync, realpathSync, openSync, writeFileSync, fchmodSync, closeSync, readSync, chmodSync, renameSync, unlinkSync } from 'fs';
+import { createHash, randomBytes } from 'crypto';
 import { resolve, sep, join, dirname, basename, relative, isAbsolute } from 'path';
 import { homedir, tmpdir } from 'os';
 
@@ -1033,6 +1034,31 @@ function isBinaryFile(path, sampleSize = 8192) {
 var VERSION = "0.4.0";
 
 // src/mcp/server.ts
+function mcpOptionsFromArgs(args, env = process.env) {
+  for (const arg of args) {
+    if (arg !== "--allow-unmask-text") throw new Error(`Unknown option for the MCP server: ${arg}`);
+  }
+  return { allowUnmaskText: args.includes("--allow-unmask-text") || env.AGENT_REDACT_ALLOW_UNMASK_TEXT === "1" };
+}
+var sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+var PLACEHOLDER_TOKEN_RE = /\[[A-Z][A-Z0-9_]*_\d+\]/g;
+function atomicReplaceFile(path, content, mode) {
+  const temp = join(dirname(path), `.${basename(path)}.agent-redact-${randomBytes(6).toString("hex")}.tmp`);
+  writeFileSync(temp, content, { encoding: "utf-8", mode: mode & 511, flag: "wx" });
+  try {
+    try {
+      chmodSync(temp, mode & 511);
+    } catch {
+    }
+    renameSync(temp, path);
+  } catch (err) {
+    try {
+      unlinkSync(temp);
+    } catch {
+    }
+    throw err;
+  }
+}
 function realpathOrNearest(p) {
   let current = resolve(p);
   const tail = [];
@@ -1170,6 +1196,17 @@ function createMcpServer(options = {}) {
       )
     },
     async ({ text, outputFilePath }) => {
+      if (!options.allowUnmaskText) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "Error: unmask_text is disabled. It can write any secret of this session into any file, so a prompt-injected model could copy secrets into files that get published. To change a file that contains secrets, use read_file_redacted and edit_file_redacted instead. If you really need unmask_text, ask the user to start the server with --allow-unmask-text (or AGENT_REDACT_ALLOW_UNMASK_TEXT=1)."
+            }
+          ]
+        };
+      }
       if (!outputFilePath || outputFilePath.trim().length === 0) {
         return {
           isError: true,
@@ -1313,6 +1350,97 @@ function createMcpServer(options = {}) {
       }
     }
   );
+  const fileVaults = /* @__PURE__ */ new Map();
+  const errorResult = (text) => ({ isError: true, content: [{ type: "text", text }] });
+  const jsonResult = (value) => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
+  const loadTextFile = (filePath, mode) => {
+    const check = checkPath(filePath, allowedRoots, mode);
+    if (!check.ok) return securityError("filePath", filePath, check.reason);
+    if (!existsSync(check.realPath)) return errorResult(`File not found: ${filePath}`);
+    const stat = statSync(check.realPath);
+    if (!stat.isFile()) return errorResult(`Not a regular file: ${filePath}`);
+    if (stat.size > DEFAULT_MAX_SCAN_BYTES) {
+      return errorResult(`File size (${(stat.size / (1024 * 1024)).toFixed(2)} MB) exceeds maximum allowed limit of 5 MB.`);
+    }
+    if (stat.size > 0 && isBinaryFile(check.realPath)) return errorResult(`Cannot handle binary file: ${filePath}`);
+    return { realPath: check.realPath, content: readFileSync(check.realPath, "utf-8"), mode: stat.mode };
+  };
+  server.tool(
+    "read_file_redacted",
+    "Reads a text file with every secret replaced by a placeholder unique to that file (e.g. [AWS_ACCESS_KEY_ID_1]). Use it instead of Read for files that contain secrets (.env, configs, credentials), then change them with edit_file_redacted. Secret values never enter the conversation. Returns the redacted content and a revision.",
+    {
+      filePath: z.string().describe("Relative or absolute path of the file to read")
+    },
+    async ({ filePath }) => {
+      const loaded = loadTextFile(filePath, "read");
+      if ("isError" in loaded) return loaded;
+      let vault = fileVaults.get(loaded.realPath);
+      if (!vault) {
+        vault = new Vault();
+        fileVaults.set(loaded.realPath, vault);
+      }
+      const result = redact(loaded.content, { reversible: true, vault });
+      return jsonResult({
+        filePath,
+        content: result.text,
+        revision: sha256(loaded.content),
+        totalSecrets: result.totalLeaks,
+        stats: result.stats
+      });
+    }
+  );
+  server.tool(
+    "edit_file_redacted",
+    "Edits a file previously read with read_file_redacted, working on the redacted text: oldString must match the redacted content exactly (placeholders included) and be unique unless replaceAll is set. Placeholders of this file in newString are written back as the real secrets; placeholders from other files are refused. Pass the revision from the last read or edit; the edit is refused if the file changed in between.",
+    {
+      filePath: z.string().describe("Path of a file already read with read_file_redacted"),
+      oldString: z.string().describe("Exact text to replace, as shown by read_file_redacted"),
+      newString: z.string().describe("Replacement text; may contain this file's placeholders"),
+      replaceAll: z.boolean().default(false).describe("Replace every occurrence of oldString"),
+      revision: z.string().describe("Revision returned by the last read_file_redacted / edit_file_redacted call")
+    },
+    async ({ filePath, oldString, newString, replaceAll, revision }) => {
+      const loaded = loadTextFile(filePath, "write");
+      if ("isError" in loaded) return loaded;
+      const vault = fileVaults.get(loaded.realPath);
+      if (!vault) return errorResult(`Call read_file_redacted first on ${filePath}.`);
+      if (sha256(loaded.content) !== revision) {
+        return errorResult(`${filePath} changed since read_file_redacted (revision mismatch). Read it again, then retry the edit.`);
+      }
+      if (oldString === "") return errorResult("oldString must not be empty.");
+      const redacted = redact(loaded.content, { reversible: true, vault }).text;
+      const crlf = loaded.content.includes("\r\n");
+      const toEol = (s) => crlf ? s.replace(/\r?\n/g, "\r\n") : s;
+      const oldText = toEol(oldString);
+      const newText = toEol(newString);
+      const count = redacted.split(oldText).length - 1;
+      if (count === 0) return errorResult(`oldString not found in the redacted content of ${filePath}.`);
+      if (count > 1 && !replaceAll) {
+        return errorResult(`oldString occurs ${count} times in ${filePath}; add surrounding context to make it unique, or set replaceAll.`);
+      }
+      for (const token of newText.match(PLACEHOLDER_TOKEN_RE) ?? []) {
+        if (vault.getOriginal(token) !== void 0) continue;
+        const foreign = sessionVault.getOriginal(token) !== void 0 || [...fileVaults.values()].some((v) => v !== vault && v.getOriginal(token) !== void 0);
+        if (foreign) {
+          return errorResult(
+            `Placeholder ${token} does not belong to this file; secrets cannot be copied between files. Ask the user to add the value themselves.`
+          );
+        }
+      }
+      const updated = replaceAll ? redacted.split(oldText).join(newText) : redacted.replace(oldText, () => newText);
+      const evicted = vault.findEvictedPlaceholders(updated);
+      if (evicted.length > 0) {
+        return errorResult(`Cannot restore ${evicted.join(", ")}: evicted from this file's vault. Read the file again.`);
+      }
+      const restored = vault.unmask(updated);
+      try {
+        atomicReplaceFile(loaded.realPath, restored, loaded.mode);
+      } catch (err) {
+        return errorResult(`Failed writing ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return jsonResult({ filePath, replacements: replaceAll ? count : 1, revision: sha256(restored) });
+    }
+  );
   server.tool(
     "get_vault_status",
     "Returns summary statistics about currently vaulted secrets (without leaking raw secrets).",
@@ -1383,8 +1511,8 @@ function createMcpServer(options = {}) {
   );
   return server;
 }
-async function runMcpServer() {
-  const server = createMcpServer();
+async function runMcpServer(args = process.argv.slice(2)) {
+  const server = createMcpServer(mcpOptionsFromArgs(args));
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
@@ -1400,6 +1528,6 @@ if (isMain) {
   });
 }
 
-export { createMcpServer, runMcpServer };
+export { createMcpServer, mcpOptionsFromArgs, runMcpServer };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map
