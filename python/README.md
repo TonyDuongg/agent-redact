@@ -36,4 +36,8 @@ findings = scan(["."])                       # honours .gitignore in git repos
 findings = scan(staged=True)                 # what is about to be committed
 ```
 
-`Session` keeps its vault in a private temporary directory, **encrypted** with a random per-session passphrase that is never written to disk, and deletes it on `close()` or when the `with` block ends.
+**Performance:** calls go to one long-lived worker per Python process (`agent-redact serve --stdio`, JSON-RPC over stdin/stdout, no network listener). A call takes about 1 ms instead of about 0.5 s to start Node.js each time. The worker is started on first use, restarted when it dies, and checked to be the same version as this package.
+
+**Session vaults** live only in the worker's memory and are discarded on `close()` or when the `with` block ends. If the worker dies or restarts, the session raises `AgentRedactError` instead of returning mis-numbered or unmasked text (fail closed).
+
+`AGENT_REDACT_TRANSPORT=subprocess` starts the CLI for every call instead (as before 0.4). `Session` then keeps its vault in a private temporary directory, **encrypted** with a random per-session passphrase that is never written to disk.

@@ -45,7 +45,9 @@ def test_unknown_preset_raises() -> None:
         redact("x", presets=["nope"])
 
 
-def test_session_numbers_consistently_and_unmasks(tmp_path: Path) -> None:
+def test_subprocess_session_numbers_consistently_and_encrypts_its_vault(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The worker transport keeps vaults in memory (tests/test_worker.py); this covers the file vault.
+    monkeypatch.setenv("AGENT_REDACT_TRANSPORT", "subprocess")
     with Session() as s:
         first = s.redact(f"first {AWS}")
         second = s.redact(f"second {AWS2} and again {AWS}")

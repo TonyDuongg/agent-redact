@@ -448,7 +448,7 @@ with Session() as s:                    # reversible across a whole conversation
 findings = scan(["."])                  # repo audit, honours .gitignore
 ```
 
-The Session vault is stored in a private temporary directory, **encrypted** with a random per-session passphrase that never touches disk, and is deleted when the `with` block ends.
+Calls go to one long-lived worker per Python process (`agent-redact serve --stdio`, JSON-RPC over stdin/stdout, no network listener). A call takes about **1 ms**, instead of about 0.5 s to start Node.js for every call. The Session vault lives only in the worker's memory and is discarded when the `with` block ends. If the worker dies, the session raises instead of returning unmasked text. `AGENT_REDACT_TRANSPORT=subprocess` restores the per-call CLI, where the vault is a temporary file **encrypted** with a random per-session passphrase that never touches disk.
 
 Other languages can pipe text through the CLI: `agent-redact --json` on stdin returns the redacted text plus matches. Use `-r --vault-out <file> --vault-key-env <VAR>` and `--unmask <file>` for reversible round-trips, and `--vault-in` to continue numbering across calls.
 
@@ -698,7 +698,7 @@ Released (details in [CHANGELOG.md](CHANGELOG.md)):
 Planned (ideas, not commitments):
 
 * [ ] **v0.4: no-code integration**
-  * Long-lived worker for the Python package: one Node process per session instead of one per call.
+  * Long-lived worker for the Python package: one Node process per Python process instead of one per call (~1 ms per call instead of ~0.5 s).
   * `agent-redact proxy`: a local proxy for the Anthropic/OpenAI APIs, enabled by setting `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`.
 * [ ] **v0.5: precision**
   * MCP `read_file_redacted`, so agents can work with secret-bearing files instead of being blocked.

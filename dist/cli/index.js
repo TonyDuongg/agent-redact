@@ -5,7 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { homedir, tmpdir } from 'os';
-import { createDecipheriv, randomBytes, createCipheriv, scryptSync, createHash } from 'crypto';
+import { createDecipheriv, randomBytes, createCipheriv, scryptSync, createHash, randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
 
 var __defProp = Object.defineProperty;
@@ -1089,10 +1089,10 @@ function isBinaryFile(path, sampleSize = 8192) {
     closeSync(fd);
   }
 }
-function readTextForScan(path, maxBytes = DEFAULT_MAX_SCAN_BYTES) {
+function readTextForScan(path, maxBytes2 = DEFAULT_MAX_SCAN_BYTES) {
   try {
     const { size } = statSync(path);
-    if (size > maxBytes) return { ok: false, reason: "too-large", size };
+    if (size > maxBytes2) return { ok: false, reason: "too-large", size };
     if (hasKnownBinaryExtension(path) || size > 0 && isBinaryFile(path)) {
       return { ok: false, reason: "binary", size };
     }
@@ -1930,7 +1930,7 @@ function expandTargets(targets, cwd, options = {}) {
   return [...out];
 }
 function runScan(req) {
-  const maxBytes = req.maxBytes ?? DEFAULT_MAX_SCAN_BYTES;
+  const maxBytes2 = req.maxBytes ?? DEFAULT_MAX_SCAN_BYTES;
   const baseline = req.baselineFile ? loadBaseline(resolve(req.cwd, req.baselineFile)) : void 0;
   const scanOptions = { ...req.options, respectInlineIgnore: true, baseline };
   const outcome = {
@@ -1956,14 +1956,14 @@ function runScan(req) {
         outcome.skipped.unreadable++;
         continue;
       }
-      if (blob.length > maxBytes) outcome.skipped["too-large"]++;
+      if (blob.length > maxBytes2) outcome.skipped["too-large"]++;
       else if (blob.subarray(0, 8192).includes(0)) outcome.skipped.binary++;
       else record(blob.toString("utf8"), toPosix(relative(req.cwd, join(root, path))));
     }
     return outcome;
   }
   for (const abs of expandTargets(req.targets, req.cwd)) {
-    const read = readTextForScan(abs, maxBytes);
+    const read = readTextForScan(abs, maxBytes2);
     if (!read.ok) {
       outcome.skipped[read.reason]++;
       continue;
@@ -2249,6 +2249,167 @@ async function runHook(args) {
   return 0;
 }
 
+// src/cli/serve.ts
+init_engine();
+init_vault();
+init_presets();
+init_version();
+var HARD_MAX_BYTES = 64 * 1024 * 1024;
+var MAX_SESSIONS = 1024;
+var PARSE_ERROR = -32700;
+var INVALID_REQUEST = -32600;
+var METHOD_NOT_FOUND = -32601;
+var INVALID_PARAMS = -32602;
+var APPLICATION_ERROR = -32e3;
+var RpcError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+  code;
+};
+function maxBytes() {
+  const raw = Number(process.env.AGENT_REDACT_SERVE_MAX_BYTES);
+  return Number.isInteger(raw) && raw > 0 ? Math.min(raw, HARD_MAX_BYTES) : HARD_MAX_BYTES;
+}
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function optionalString(params, key) {
+  const value = params[key];
+  if (value === void 0 || value === null) return void 0;
+  if (typeof value !== "string") throw new RpcError(INVALID_PARAMS, `"${key}" must be a string`);
+  return value;
+}
+function requiredString(params, key) {
+  const value = optionalString(params, key);
+  if (value === void 0) throw new RpcError(INVALID_PARAMS, `"${key}" is required`);
+  return value;
+}
+function buildOptions(params) {
+  const presets = params.presets ?? [];
+  if (!Array.isArray(presets) || !presets.every((p) => typeof p === "string")) {
+    throw new RpcError(INVALID_PARAMS, '"presets" must be an array of strings');
+  }
+  if (params.entropy !== void 0 && typeof params.entropy !== "boolean") {
+    throw new RpcError(INVALID_PARAMS, '"entropy" must be a boolean');
+  }
+  const cwd = optionalString(params, "cwd") ?? process.cwd();
+  try {
+    const config = loadConfig(optionalString(params, "config"), cwd);
+    const effectivePresets = [...config?.presets ?? [], ...presets];
+    resolvePresets(effectivePresets);
+    return {
+      include: config?.include,
+      exclude: config?.exclude,
+      allowlist: config?.allowlist,
+      customPatterns: config?.customPatterns,
+      detectHighEntropy: params.entropy === true || (config?.detectHighEntropy ?? false),
+      presets: effectivePresets,
+      entropy: config?.entropy
+    };
+  } catch (err) {
+    throw new RpcError(APPLICATION_ERROR, err instanceof Error ? err.message : String(err));
+  }
+}
+function createHandler() {
+  const sessions = /* @__PURE__ */ new Map();
+  const getSession = (params) => {
+    const id = requiredString(params, "session");
+    const session = sessions.get(id);
+    if (!session) throw new RpcError(APPLICATION_ERROR, "Unknown session (closed, or the worker restarted)");
+    return session;
+  };
+  return (method, params) => {
+    switch (method) {
+      case "version":
+        return { version: VERSION2 };
+      case "redact": {
+        const text = requiredString(params, "text");
+        if (params.session !== void 0) {
+          const session = getSession(params);
+          const { vault: _vault2, ...result2 } = redact(text, { ...session.options, reversible: true, vault: session.vault });
+          return result2;
+        }
+        const { vault: _vault, ...result } = redact(text, buildOptions(params));
+        return result;
+      }
+      case "unmask": {
+        const text = requiredString(params, "text");
+        return { text: unmask(text, getSession(params).vault) };
+      }
+      case "session.open": {
+        if (sessions.size >= MAX_SESSIONS) throw new RpcError(APPLICATION_ERROR, `Too many open sessions (${MAX_SESSIONS})`);
+        const id = randomUUID();
+        sessions.set(id, { vault: new Vault(), options: buildOptions(params) });
+        return { session: id };
+      }
+      case "session.close":
+        return { closed: sessions.delete(requiredString(params, "session")) };
+      default:
+        throw new RpcError(METHOD_NOT_FOUND, `Method not found: ${method}`);
+    }
+  };
+}
+function respond(handle, line) {
+  let message;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    return { jsonrpc: "2.0", id: null, error: { code: PARSE_ERROR, message: "Parse error" } };
+  }
+  const id = isObject(message) && (typeof message.id === "number" || typeof message.id === "string") ? message.id : null;
+  if (!isObject(message) || message.jsonrpc !== "2.0" || id === null || typeof message.method !== "string") {
+    return { jsonrpc: "2.0", id, error: { code: INVALID_REQUEST, message: "Invalid request" } };
+  }
+  const params = message.params ?? {};
+  if (!isObject(params)) {
+    return { jsonrpc: "2.0", id, error: { code: INVALID_PARAMS, message: '"params" must be an object' } };
+  }
+  try {
+    return { jsonrpc: "2.0", id, result: handle(message.method, params) };
+  } catch (err) {
+    const code = err instanceof RpcError ? err.code : APPLICATION_ERROR;
+    return { jsonrpc: "2.0", id, error: { code, message: err instanceof Error ? err.message : String(err) } };
+  }
+}
+async function runServe(args, input = process.stdin, output = process.stdout, errors = process.stderr) {
+  if (args.length !== 1 || args[0] !== "--stdio") {
+    errors.write("Usage: agent-redact serve --stdio   (newline-delimited JSON-RPC 2.0 on stdin/stdout)\n");
+    return 2;
+  }
+  const limit = maxBytes();
+  const handle = createHandler();
+  const write = (obj) => new Promise((resolve5) => {
+    if (output.write(JSON.stringify(obj) + "\n")) resolve5();
+    else output.once("drain", resolve5);
+  });
+  let pending = [];
+  let pendingBytes = 0;
+  for await (const chunk of input) {
+    let data = chunk;
+    let nl;
+    while ((nl = data.indexOf(10)) !== -1) {
+      const line = Buffer.concat([...pending, data.subarray(0, nl)]).toString("utf8").replace(/\r$/, "");
+      pending = [];
+      pendingBytes = 0;
+      data = data.subarray(nl + 1);
+      if (Buffer.byteLength(line) > limit) {
+        await write({ jsonrpc: "2.0", id: null, error: { code: INVALID_REQUEST, message: `Message too large (limit ${limit} bytes)` } });
+        return 1;
+      }
+      if (line.trim() !== "") await write(respond(handle, line));
+    }
+    pending.push(data);
+    pendingBytes += data.length;
+    if (pendingBytes > limit) {
+      await write({ jsonrpc: "2.0", id: null, error: { code: INVALID_REQUEST, message: `Message too large (limit ${limit} bytes)` } });
+      return 1;
+    }
+  }
+  return 0;
+}
+
 // src/cli/index.ts
 function writeSecureFile(filePath, content) {
   writeFileSync(filePath, content, { encoding: "utf-8", mode: 384 });
@@ -2335,6 +2496,7 @@ ${colors.bold}USAGE:${colors.reset}
   npx agent-redact --staged                 Scan what is staged for commit (git index)
   npx agent-redact mcp                      Start Model Context Protocol (MCP) server
   npx agent-redact hook [--block-writes]    Claude Code hook (reads hook JSON on stdin)
+  npx agent-redact serve --stdio            Long-lived JSON-RPC worker on stdin/stdout (Python package)
 
 ${colors.bold}SCAN OPTIONS:${colors.reset}
   --format <text|json|sarif>  Report format (json/sarif go to stdout or --report)
@@ -2393,6 +2555,10 @@ async function main() {
   }
   if (args[0] === "hook") {
     process.exit(await runHook(args.slice(1)));
+  }
+  if (args[0] === "serve") {
+    process.exitCode = await runServe(args.slice(1));
+    return;
   }
   if (args.includes("-h") || args.includes("--help")) {
     printHelp();
