@@ -110,7 +110,7 @@ describe('Credential Patterns & Redact Engine', () => {
 
   describe('Stripe Keys', () => {
     it('should detect Stripe secret live keys', () => {
-      const stripeLiveSecret = sampleKey('sk', '_', 'live_51AbcdefghijklmnopqrstuvwxyzA1B2C3D4E5');
+      const stripeLiveSecret = sampleKey('sk', '_', 'live', '_51AbcdefghijklmnopqrstuvwxyzA1B2C3D4E5');
       const input = `STRIPE_SECRET=${stripeLiveSecret}`;
 
       const result = redact(input);
@@ -120,7 +120,7 @@ describe('Credential Patterns & Redact Engine', () => {
     });
 
     it('should detect Stripe publishable keys', () => {
-      const stripePk = sampleKey('pk', '_', 'live_51AbcdefghijklmnopqrstuvwxyzA1B2C3D4E5');
+      const stripePk = sampleKey('pk', '_', 'live', '_51AbcdefghijklmnopqrstuvwxyzA1B2C3D4E5');
       const input = `publishableKey: "${stripePk}"`;
 
       const result = redact(input);

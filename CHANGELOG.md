@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### 🔒 Supply chain
+- **npm Trusted Publishing (OIDC):** `release.yml` no longer uses an `NPM_TOKEN` secret. A `verify` job (no OIDC) checks that the tag is on `main` and matches `package.json`, runs the type check and tests, and requires the rebuilt `dist/` to equal the committed one. A `publish` job then publishes the committed `dist/` with `--ignore-scripts`, from the `npm` environment, on Node 24 (npm ≥ 11.5.1 is enforced). It is the only job with `id-token: write`, and it installs and builds nothing. Provenance is generated automatically.
+- **Every action is pinned to a commit SHA** with a `# vX.Y.Z` comment and upgraded: `checkout` v7.0.1, `setup-node` v7.1.0, `setup-python` v7.1.0 (v5 still ran on the end-of-life Node 20 runtime), `upload-artifact` v7.0.2, `download-artifact` v8.0.2, `gh-action-pypi-publish` v1.14.3 (the commit `release/v1` pointed to).
+- **Dependabot** (`.github/dependabot.yml`): weekly grouped updates for npm and for the pinned actions.
+- **GitHub secret-scanning false positives fixed:** a dummy MongoDB URL and dummy Stripe `live` keys in tests and benchmarks are now assembled at runtime. The `live_…` fragment on its own matched the GoCardless token pattern.
+- `tests/supply-chain.test.ts` enforces SHA pinning, no npm token, OIDC only in `publish*` jobs that install and build nothing, the tag and version checks, and the Dependabot config.
+
+---
+
 ## [0.3.0] - 2026-11-08
 
 Node.js 22.18+ is now required, and the toolchain moves to Vitest 5, tsup 9 and TypeScript 7. The xAI and Replicate patterns now catch keys they used to miss, and a script checks real provider keys locally. The Python package is on PyPI, published through Trusted Publishing.
