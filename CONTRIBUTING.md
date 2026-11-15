@@ -1,6 +1,6 @@
 # Contributing to agent-redact 🛡️
 
-First off, thank you for considering contributing to `agent-redact`! It's people like you who make this tool a powerful, zero-leak defense layer for the open-source AI community.
+First off, thank you for considering contributing to `agent-redact`! It's people like you who make this tool a powerful defense layer against secret leaks for the open-source AI community.
 
 ---
 

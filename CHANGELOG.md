@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### 📝 Docs
+- **Removed claims the package cannot back up.** "Zero-latency" is gone from the npm description and the README (scanning is linear and fast, not free). The "dependencies: 0" badge is now "core engine deps: 0": the npm package has two runtime dependencies (`@modelcontextprotocol/sdk`, `zod`), but `src/core` has none.
+- **Roadmap uses the real version numbers** (0.1.x–0.3.0 released, 0.4/0.5 planned). It no longer lists Fastify middleware, which never existed.
+- A new test, `tests/docs-claims.test.ts`, guards these claims.
+
+### 🐍 Python package
+- **The wheel and sdist now include the MIT `LICENSE`** (PEP 639 `license-files`, hatchling ≥ 1.27). A test keeps `python/LICENSE` identical to the repository license, and `release-python.yml` refuses to publish files without it.
+
+---
+
 ## [0.3.0] - 2026-11-08
 
 Node.js 22.18+ is now required, and the toolchain moves to Vitest 5, tsup 9 and TypeScript 7. The xAI and Replicate patterns now catch keys they used to miss, and a script checks real provider keys locally. The Python package is on PyPI, published through Trusted Publishing.
