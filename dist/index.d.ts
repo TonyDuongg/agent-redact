@@ -13,5 +13,7 @@ export { calculateShannonEntropy, isHighEntropyToken, createHighEntropyPattern }
 export type { EntropyConfig } from './core/entropy.js';
 export { wrapAgent, createExpressMiddleware } from './middleware/index.js';
 export type { AgentInterceptorOptions, RedactRequestExtension } from './middleware/index.js';
+export { startProxy } from './proxy/server.js';
+export type { ProxyOptions, ProxyProvider, RunningProxy } from './proxy/server.js';
 export type { SecretCategory, Severity, RedactPattern, RedactMatch, VaultEntry, RedactOptions, RedactResult } from './core/types.js';
 export * from './patterns/index.js';

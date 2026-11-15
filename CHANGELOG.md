@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Python package uses a long-lived worker by default.** All calls go to one `agent-redact serve --stdio` process per Python process. The CLI must therefore be **0.4 or newer and exactly the same version** as the Python package; a mismatch raises `AgentRedactError`. Set `AGENT_REDACT_TRANSPORT=subprocess` for the previous per-call behavior.
 - **`Session` vaults live in the worker's memory**, no longer in an encrypted temporary file (unless `AGENT_REDACT_TRANSPORT=subprocess`). If the worker dies or restarts, every later call on that `Session` raises instead of returning mis-numbered or unmasked text.
 
+### 🔌 Local API proxy (no code changes)
+- **`agent-redact proxy --provider anthropic|openai`** (and `startProxy()` in the library): point `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` (with `/v1`) at it.
+  - Request bodies are redacted with `redactDeep` and one vault shared for the proxy's lifetime, so a secret keeps the same placeholder across turns.
+  - JSON responses are restored with `unmaskDeep`. SSE streams are restored with the Anthropic/OpenAI stream adapters, including placeholders split across events; OpenAI's `[DONE]` is kept last.
+- **Tool inputs stay masked by default** (exfiltration guard). `--unmask-tool-inputs <names|*>` opts in.
+- **Fail closed:**
+  - listens on the loopback address only;
+  - **rejects browser requests (`Origin`) and foreign `Host` headers**: without this, a web page could call the proxy with its own API key, ask the model to echo a placeholder and read the restored secret through the API's CORS headers. CORS headers are also stripped from responses;
+  - refuses non-JSON, compressed, malformed or oversized (> 32 MB) request bodies with 415/400/413 instead of forwarding them;
+  - passes unknown response content through still masked;
+  - accepts only https upstreams (plain http only for loopback).
+- Auth headers are forwarded untouched and never logged; the log has one line per request with counts per pattern.
+- `tests/proxy.test.ts` (12) runs against a local fake upstream.
+
 ### ⚡ Python package: about 500× faster calls
 - **`agent-redact serve --stdio`:** newline-delimited JSON-RPC 2.0 on stdin/stdout. Methods: `version`, `redact`, `unmask`, `session.open`, `session.close`. It has no network listener, so no other process can connect.
   - Session vaults are in memory only.

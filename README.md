@@ -26,6 +26,7 @@ Developers and autonomous AI agents (**Claude Code, Cursor, OpenAI, DeepSeek, Go
 * **Dual-Way Reversible Masking (Vault)**: Masks sensitive tokens into numbered session placeholders (`[ANTHROPIC_API_KEY_1]`) and reliably unmasks them after the LLM completes its reasoning.
 * **Severity-Based Conflict Resolution**: Mathematical arbitration prioritizes high-risk credentials over overlapping low-risk patterns (e.g. GitHub PAT vs. email regex).
 * **CLI & SDK Ready**: Instant CLI utility (`npx agent-redact`) and modern dual ESM/CJS SDK for Node.js 22.18+.
+* **No-Code Proxy**: `agent-redact proxy` protects any Anthropic/OpenAI client through `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`, including streaming.
 
 ---
 
@@ -596,6 +597,33 @@ repos:
 ```
 
 Without the pre-commit framework, a plain git hook works too: `npx agent-redact --staged` in `.git/hooks/pre-commit` scans exactly what is being committed.
+
+---
+
+### 14. Local API Proxy (no code changes)
+
+`agent-redact proxy` sits between any SDK or tool and the Anthropic or OpenAI API. Request bodies are redacted with reversible placeholders before they leave the machine, and responses (JSON and streams) are restored, so nothing in your code changes:
+
+```bash
+npx agent-redact proxy --provider anthropic        # prints: ANTHROPIC_BASE_URL=http://<loopback>:8787
+export ANTHROPIC_BASE_URL=http://localhost:8787    # Anthropic SDKs, Claude Code, …
+
+npx agent-redact proxy --provider openai --port 8788
+export OPENAI_BASE_URL=http://localhost:8788/v1    # OpenAI SDKs and compatible tools
+```
+
+* **One vault per proxy process:** each request re-sends the whole conversation, so the same secret always gets the same placeholder. Streamed placeholders split across SSE events are reassembled.
+* **Tool inputs stay masked by default.** A prompt-injected model could otherwise put a secret into a tool argument, such as a URL. Allow specific tools with `--unmask-tool-inputs Bash,Edit`, or `*` for all.
+* **Fail closed:**
+  * listens on the loopback address only;
+  * rejects browser requests (any `Origin` header) and foreign `Host` headers (DNS rebinding), so a web page cannot ask the model to echo a placeholder and read the restored secret;
+  * refuses non-JSON, compressed, malformed or oversized (> 32 MB) request bodies instead of forwarding them;
+  * passes unknown response content through still masked;
+  * accepts only https upstreams (`--upstream`; plain http only for loopback).
+* API keys in `x-api-key` / `Authorization` are forwarded untouched and never logged. The log shows only counts per pattern.
+* Detection options: `--preset`, `--entropy`, `--config`. In code: `import { startProxy } from 'agent-redact'`.
+
+Any process running as your user can send requests through the proxy, and the vault is shared, so treat it like the secrets it protects. Run it only on machines where you trust the local processes.
 
 ---
 

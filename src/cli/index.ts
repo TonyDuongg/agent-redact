@@ -19,6 +19,7 @@ import {
 } from './scan.js';
 import { runHook } from './hook.js';
 import { runServe } from './serve.js';
+import { runProxyCli } from './proxy.js';
 
 function writeSecureFile(filePath: string, content: string): void {
   writeFileSync(filePath, content, { encoding: 'utf-8', mode: 0o600 });
@@ -121,6 +122,7 @@ ${colors.bold}USAGE:${colors.reset}
   npx agent-redact mcp                      Start Model Context Protocol (MCP) server
   npx agent-redact hook [--block-writes]    Claude Code hook (reads hook JSON on stdin)
   npx agent-redact serve --stdio            Long-lived JSON-RPC worker on stdin/stdout (Python package)
+  npx agent-redact proxy --provider <name>  Local redacting proxy for the Anthropic/OpenAI API (see proxy --help)
 
 ${colors.bold}SCAN OPTIONS:${colors.reset}
   --format <text|json|sarif>  Report format (json/sarif go to stdout or --report)
@@ -183,6 +185,11 @@ async function main(): Promise<void> {
 
   if (args[0] === 'hook') {
     process.exit(await runHook(args.slice(1)));
+  }
+
+  if (args[0] === 'proxy') {
+    process.exitCode = await runProxyCli(args.slice(1));
+    return;
   }
 
   if (args[0] === 'serve') {
