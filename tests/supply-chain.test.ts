@@ -60,4 +60,13 @@ describe('Supply-chain hardening of the workflows', () => {
     expect(config).toMatch(/package-ecosystem: "?npm"?/);
     expect(config).toMatch(/package-ecosystem: "?github-actions"?/);
   });
+
+  it('Dependabot never moves @types/node past the minimum supported Node major', () => {
+    // Types for a newer Node would let code use APIs that do not exist on the minimum version.
+    const config = read('.github', 'dependabot.yml');
+    const pkg = JSON.parse(read('package.json')) as { engines: { node: string }; devDependencies: Record<string, string> };
+    const minMajor = /(\d+)\./.exec(pkg.engines.node)![1];
+    expect(pkg.devDependencies['@types/node']).toMatch(new RegExp(`^\\^${minMajor}\\.`));
+    expect(config).toMatch(/dependency-name: "@types\/node"\s*\n\s*update-types: \["version-update:semver-major"\]/);
+  });
 });
