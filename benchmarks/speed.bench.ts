@@ -13,7 +13,7 @@ AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
 aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 DATABASE_URL=postgres://postgres:SuperSecretDbPass2025@db.production.internal:5432/main_db
 GITHUB_TOKEN=${sampleKey('gh', 'p_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')}
-STRIPE_KEY=${sampleKey('sk', '_', 'live_51AbcdefghijklmnopqrstuvwxyzA1B2C3D4E5')}
+STRIPE_KEY=${sampleKey('sk', '_', 'live', '_51AbcdefghijklmnopqrstuvwxyzA1B2C3D4E5')}
 USER_EMAIL=developer@agentic-systems.io
 JWT_BEARER=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
 

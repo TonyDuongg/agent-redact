@@ -1,60 +1,102 @@
 name: Release & Publish to npm
 
+# Publishes the npm package with npm Trusted Publishing (OIDC): no long-lived npm token is used.
+#
+# - verify: on the tag, check that it is on main and matches package.json, install, type check,
+#   test, rebuild and require the rebuilt dist/ to equal the committed dist/.
+# - publish: the only job with `id-token: write`, in the `npm` environment. It installs and builds
+#   nothing: it checks out the same tag and publishes the committed dist/ with --ignore-scripts.
+#   Provenance is generated automatically by trusted publishing.
+
 on:
   push:
     tags:
       - 'v*'
 
-jobs:
-  publish:
-    name: Publish to npm
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      # A step's own `env:` is not visible to that step's `if:`, so the previous
-      # `if: env.NODE_AUTH_TOKEN != ''` was always false and publishing was silently skipped.
-      # Expose only a boolean at job level; the token itself stays scoped to the publish step.
-      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+permissions:
+  contents: read
 
+concurrency:
+  group: release-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # origin/main for the "tag is on main" check
+          persist-credentials: false
 
       - name: Set up Node.js 22.x
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22.x
-          registry-url: 'https://registry.npmjs.org'
+          node-version: 22.x # no dependency cache: release checks run on a clean install
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run verification
+      - name: Verify tag matches package.json and is on main
         run: |
-          npm run typecheck
-          npm test
-
-      - name: Build package
-        run: npm run build
-
-      - name: Verify tag matches package.json version
-        run: |
+          set -euo pipefail
           PKG_VERSION="v$(node -p "require('./package.json').version")"
           if [ "$PKG_VERSION" != "$GITHUB_REF_NAME" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
             exit 1
           fi
+          # npm versions are immutable: only publish reviewed code, i.e. a tag on main.
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME points to $GITHUB_SHA, which is not on main"
+            exit 1
+          fi
 
-      - name: Publish to npm
-        if: env.HAS_NPM_TOKEN == 'true'
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Fail when npm token is missing
-        if: env.HAS_NPM_TOKEN != 'true'
+      - name: Type check and test
         run: |
-          echo "::error::NPM_TOKEN repository secret is not configured, so the package was NOT published."
-          exit 1
+          npm run typecheck
+          npm test
+
+      - name: Rebuild and require the committed dist/ to match
+        run: |
+          npm run build
+          git -c core.fileMode=false diff --exit-code dist
+          test -z "$(git status --porcelain dist)"
+
+      - name: Dry-run the package
+        run: npm pack --dry-run
+
+  publish:
+    name: Publish to npm
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/agent-redact/v/${{ github.ref_name }}
+    permissions:
+      contents: read
+      id-token: write # Trusted Publishing; nothing else
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 24.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.x # trusted publishing needs npm >= 11.5.1
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Require npm >= 11.5.1
+        run: |
+          node -e "
+            const [a, b, c] = process.argv[1].split('.').map(Number);
+            const ok = a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1)));
+            console.log('npm', process.argv[1]);
+            if (!ok) { console.error('::error::npm ' + process.argv[1] + ' cannot use trusted publishing (needs >= 11.5.1)'); process.exit(1); }
+          " "$(npm --version)"
+
+      - name: Publish (committed dist/, no lifecycle scripts)
+        run: npm publish --ignore-scripts --access public
