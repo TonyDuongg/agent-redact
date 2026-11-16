@@ -26,7 +26,8 @@ describe('Shannon Entropy Calculator & Heuristics', () => {
 
   it('should detect generic high-entropy secret in sensitive assignment context when enabled', () => {
     const secret = 'xK9_mQ2$pL8vN1!aB7cE4*jH3yF0@zR5';
-    const prompt = `api_key = "${secret}"`;
+    // Unquoted: no default pattern covers it, so only the entropy heuristic can find it
+    const prompt = `api_key = ${secret}`;
 
     // Without entropy detection enabled -> ignored
     const noEntropy = redact(prompt, { detectHighEntropy: false });
@@ -36,13 +37,20 @@ describe('Shannon Entropy Calculator & Heuristics', () => {
     const withEntropy = redact(prompt, { detectHighEntropy: true });
     expect(withEntropy.hasLeaks).toBe(true);
     expect(withEntropy.matches[0]?.patternId).toBe('generic-high-entropy-secret');
-    expect(withEntropy.text).toBe('api_key = "[REDACTED_GENERIC_SECRET]"');
+    expect(withEntropy.text).toBe('api_key = [REDACTED_GENERIC_SECRET]');
+
+    // Quoted assignments are caught by default (quoted-secret-assignment, since v0.5)
+    expect(redact(`api_key = "${secret}"`).text).toBe('api_key = "[REDACTED_QUOTED_SECRET]"');
   });
 
   it('should NOT flag low-entropy predictable values as generic secrets', () => {
-    const predictable = 'password = "admin123admin123admin123"';
+    const predictable = 'password = admin123admin123admin123';
     const res = redact(predictable, { detectHighEntropy: true });
     expect(res.hasLeaks).toBe(false);
+    // A quoted literal password is a hardcoded secret whatever its entropy
+    expect(redact('password = "admin123admin123admin123"').matches.map((m) => m.patternId)).toEqual([
+      'quoted-secret-assignment'
+    ]);
   });
 });
 

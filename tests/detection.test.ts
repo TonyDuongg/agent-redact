@@ -61,6 +61,13 @@ const POSITIVES: Record<string, string[]> = {
   // Replicate docs: 40 characters starting with r8_; trufflehog allows '-' and '_' in the body
   'replicate-api-token': [j('r8_', r(37)), j('r8_', r(20), '-', r(8), '_', r(7)), j('r8_', r(36), '-')],
   'langsmith-api-key': [j('lsv2_', 'pt_', hex(32), '_', hex(10)), j('lsv2_', 'sk_', hex(32), '_', hex(10))],
+  // Context-aware generic secrets: the span is the value only (see CONTEXT below)
+  'npmrc-auth': [r(36)],
+  'netrc-password': [j('Zx8', 'vQ2mT7pL', 'k4Rw')],
+  'docker-config-auth': [Buffer.from(j('deploy', ':', r(24))).toString('base64')],
+  'quoted-secret-assignment': [r(24), j('p@ss', '\\"', 'w0rd', r(8))],
+  'dotenv-secret': [r(32), j('Hy3', 'nB6cW9qD', 'e1Fs')],
+  'kubernetes-secret': [Buffer.from(r(20)).toString('base64')],
   'email-address': ['jane.doe+tests@example.org'],
   'ipv4-address': ['192.168.10.42'],
   'ipv6-address': ['2001:db8:85a3::8a2e:370:7334'],
@@ -71,7 +78,13 @@ const POSITIVES: Record<string, string[]> = {
 
 /** Patterns that only match with surrounding context */
 const CONTEXT: Record<string, (s: string) => string> = {
-  'aws-secret-access-key': (s) => `aws_secret_access_key = ${s}\n`
+  'aws-secret-access-key': (s) => `aws_secret_access_key = ${s}\n`,
+  'npmrc-auth': (s) => `//registry.npmjs.org/:_authToken=${s}\n`,
+  'netrc-password': (s) => `machine api.example.com\n  login deploy\n  password ${s}\n`,
+  'docker-config-auth': (s) => `{"auths": {"ghcr.io": {"auth": "${s}"}}}`,
+  'quoted-secret-assignment': (s) => `{"client_secret": "${s}"}`,
+  'dotenv-secret': (s) => `DB_HOST=db\nDB_PASSWORD=${s}\n`,
+  'kubernetes-secret': (s) => `apiVersion: v1\ndata:\n  password: ${s}\nkind: Secret\nmetadata:\n  name: db\n`
 };
 
 describe('Labelled detection corpus', () => {

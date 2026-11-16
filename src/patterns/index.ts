@@ -1,8 +1,10 @@
 import { CREDENTIAL_PATTERNS, databaseUrlPattern } from './credentials.js';
+import { CONTEXT_PATTERNS } from './context.js';
 import { PII_PATTERNS } from './pii.js';
 import type { RedactPattern } from '../core/types.js';
 
 export * from './credentials.js';
+export * from './context.js';
 export * from './pii.js';
 export * from './vn.js';
 export { PATTERN_PRESETS, resolvePresets } from './presets.js';
@@ -12,6 +14,7 @@ export { PATTERN_PRESETS, resolvePresets } from './presets.js';
  */
 export const DEFAULT_PATTERNS: RedactPattern[] = [
   ...CREDENTIAL_PATTERNS,
+  ...CONTEXT_PATTERNS,
   ...PII_PATTERNS
 ];
 

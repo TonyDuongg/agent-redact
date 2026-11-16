@@ -68,7 +68,10 @@ if (!existsSync(entry)) {
   console.error('dist/index.js not found: run `npm run build` first.');
   process.exit(2);
 }
-const { redact } = await import(pathToFileURL(entry).href);
+const { redact, CONTEXT_PATTERNS } = await import(pathToFileURL(entry).href);
+// Judge the provider pattern alone: context-aware patterns (e.g. .env keys) would otherwise
+// catch every key in the contexts above and hide whether the provider pattern works.
+const EXCLUDE = (CONTEXT_PATTERNS ?? []).map((p) => p.id);
 
 /** Non-secret description of a key: prefix match, length and character classes only. */
 function shape(key, prefix) {
@@ -89,7 +92,7 @@ function check(key, patternId) {
     const end = start + key.length;
     let res;
     try {
-      res = redact(text);
+      res = redact(text, { exclude: EXCLUDE });
     } catch {
       return 'redact() threw';
     }

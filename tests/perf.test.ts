@@ -51,6 +51,37 @@ describe('Performance guards', () => {
     expect(ms).toBeLessThan(2000);
   });
 
+  it('keeps the context-aware secret patterns linear on adversarial input', () => {
+    // Nested `kind: Secret` mappings: each level is a mapping the detector has to bound
+    let nested = '';
+    for (let d = 0; d < 300; d++) nested += `${' '.repeat(2 * d)}kind: Secret\n${' '.repeat(2 * d)}x:\n`;
+    const inputs: Record<string, string> = {
+      'uppercase key run': 'A'.repeat(100_000) + '=x\n',
+      'keyword key run': 'PASSWORD'.repeat(12_500) + '\n',
+      'keyword keys without =': ('DB_PASSWORD' + ' '.repeat(10)).repeat(5_000),
+      'digits after keyword': 'API_KEY' + '1'.repeat(100_000) + '=x',
+      'identifier run': 'a'.repeat(100_000),
+      'separator ladder': 'password=password='.repeat(5_000),
+      'unclosed quotes': 'password: "'.repeat(10_000),
+      'unclosed backslashes': 'password: "' + '\\'.repeat(100_000),
+      'quote soup': `password: "${"'".repeat(50_000)}${'"'.repeat(50_000)}`,
+      'npmrc colons': '//' + ':'.repeat(100_000) + '\n',
+      'npmrc prefixes': '//a:'.repeat(25_000) + '_auth\n',
+      'netrc login chain': 'machine m ' + 'login l '.repeat(20_000),
+      'netrc machines': 'machine m login l '.repeat(10_000),
+      'docker auth unclosed': '"auth": "' + 'A'.repeat(100_000),
+      'k8s duplicate kinds': 'kind: Secret\n'.repeat(20_000) + 'data:\n  a: b1234567890\n',
+      'k8s nested mappings': nested,
+      'k8s dash markers': 'kind: Secret\ndata:\n' + '- '.repeat(50_000) + 'k: v\n',
+      'k8s key spaces': 'kind: Secret\ndata:\n  a' + ' '.repeat(100_000) + '\n',
+      'k8s many entries': 'kind: Secret\ndata:\n' + '  k: dmFsdWUxMjM0NTY=\n'.repeat(10_000)
+    };
+    for (const [name, text] of Object.entries(inputs)) {
+      const { ms } = timed(() => redact(text));
+      expect(ms, name).toBeLessThan(1500);
+    }
+  });
+
   it('keeps email detection behaviour for normal addresses', () => {
     const text = 'mail john.doe+tag@sub.example.co.uk, a@b.io and x_y%z@host-name.dev';
     expect(redact(text).text).toBe(

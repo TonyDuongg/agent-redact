@@ -28,6 +28,14 @@ export interface RedactPattern {
    * groups used only for alternation no longer cause partial redaction.
    */
   secretGroup?: number | string;
+  /**
+   * Structural detector for secrets that one regex cannot express, e.g. the values of a
+   * Kubernetes Secret, which depend on a `kind:` line elsewhere in the same YAML document.
+   * When set, `regex` only gates the detector: `detect` runs only if `regex` matches somewhere
+   * in the text, and each returned `[start, end)` span is redacted. `validator` and the
+   * allowlist still apply to each span. It must run in linear time on hostile input.
+   */
+  detect?: (text: string) => Iterable<readonly [number, number]>;
 }
 
 export interface RedactMatch {
