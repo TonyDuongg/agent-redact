@@ -1467,7 +1467,7 @@ var init_files = __esm({
 var VERSION2;
 var init_version = __esm({
   "src/version.ts"() {
-    VERSION2 = "0.4.0";
+    VERSION2 = "0.5.0";
   }
 });
 

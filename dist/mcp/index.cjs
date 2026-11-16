@@ -1302,7 +1302,7 @@ function isBinaryFile(path, sampleSize = 8192) {
 }
 
 // src/version.ts
-var VERSION = "0.4.0";
+var VERSION = "0.5.0";
 
 // src/mcp/server.ts
 function mcpOptionsFromArgs(args, env = process.env) {

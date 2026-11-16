@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.5.0] - 2026-11-16
+
+Precision.
+- **Edit secret files safely (MCP):** agents can read and edit files that contain secrets without ever seeing them.
+- **Six new patterns, on by default:** they catch secrets that have no vendor prefix, such as `.env` passwords, quoted password literals, `.npmrc`, `.netrc`, Docker `config.json` and Kubernetes Secrets.
+- **Quality tooling:**
+  - a coverage report against gitleaks and trufflehog;
+  - a published precision/recall benchmark on synthetic data;
+  - automatic ReDoS fuzzing of every pattern.
 
 ### ⚠️ Upgrade notes (behavior changes)
 - **MCP `unmask_text` is disabled by default.** It can write any secret of the session into any file inside the sandbox, so a prompt-injected model could copy secrets into files that get committed or published. It now returns an error that explains how to enable it: `agent-redact mcp --allow-unmask-text`, `AGENT_REDACT_ALLOW_UNMASK_TEXT=1`, or `createMcpServer({ allowUnmaskText: true })`. Use `read_file_redacted` / `edit_file_redacted` to change files that contain secrets.

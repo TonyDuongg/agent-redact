@@ -604,7 +604,7 @@ Prevent accidental credential commits locally using [pre-commit](https://pre-com
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/TonyDuongg/agent-redact
-    rev: v0.4.0
+    rev: v0.5.0
     hooks:
       - id: agent-redact
 ```
@@ -826,12 +826,16 @@ Released (details in [CHANGELOG.md](CHANGELOG.md)):
 * [x] **v0.4.0: no-code integration**
   * Long-lived worker for the Python package (`agent-redact serve --stdio`): ~1 ms per call instead of ~0.5 s.
   * `agent-redact proxy`: a local redacting proxy for the Anthropic/OpenAI APIs, enabled by setting `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`.
+* [x] **v0.5.0: precision**
+  * MCP `read_file_redacted` / `edit_file_redacted`: agents edit files that contain secrets without seeing them; `unmask_text` is opt-in.
+  * Context-aware secrets on by default: `.env` passwords, quoted password literals, `.npmrc`, `.netrc`, Docker `config.json`, Kubernetes Secrets.
+  * Coverage report against gitleaks and trufflehog, published precision/recall benchmark (synthetic), ReDoS fuzzing of every pattern.
 
 Planned (ideas, not commitments):
 
-* [ ] **v0.5: precision**
-  * MCP `read_file_redacted`, so agents can work with secret-bearing files instead of being blocked.
-  * Context-aware generic secrets (`password=`, `.npmrc`, `.netrc`, Kubernetes secrets), coverage report against public scanner rules, published precision/recall benchmark.
+* [ ] **v0.6: breadth**
+  * Patterns for the most common of the 83 providers that both gitleaks and trufflehog know and agent-redact does not ([coverage report](benchmarks/coverage.md)).
+  * Kubernetes Secrets in JSON (`kubectl get -o json`), and multi-line `.netrc` / Kubernetes detection in `createRedactStream`.
 
 ---
 
