@@ -1,0 +1,75 @@
+{
+  "$comment": "Maps agent-redact pattern ids to gitleaks rule ids and trufflehog detector types at the pinned versions below. Used by scripts/coverage-report.mjs. Only map a rule when the pattern detects the same credential format. Every default and preset pattern must have an entry (an empty list means no counterpart).",
+  "sources": {
+    "gitleaks": {
+      "repo": "gitleaks/gitleaks",
+      "version": "v8.30.1",
+      "commit": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
+      "path": "config/gitleaks.toml",
+      "sha256": "e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf"
+    },
+    "trufflehog": {
+      "repo": "trufflesecurity/trufflehog",
+      "version": "v3.99.9",
+      "commit": "3bd2b5887eb0efb8fa18bfd1d296032924e4ffdc",
+      "path": "proto/detector_type.proto",
+      "sha256": "fdd43b3b2739918eb674a371aa09953bfa803e8320a223d902f924da28f8ecbb"
+    }
+  },
+  "providerAliases": {
+    "1password": "onepassword"
+  },
+  "patterns": {
+    "anthropic-api-key": { "gitleaks": ["anthropic-api-key", "anthropic-admin-api-key"], "trufflehog": ["Anthropic"] },
+    "openai-api-key": { "gitleaks": ["openai-api-key"], "trufflehog": ["OpenAI", "OpenAIAdmin"] },
+    "aws-access-key-id": { "gitleaks": ["aws-access-token"], "trufflehog": ["AWS"] },
+    "aws-secret-access-key": { "gitleaks": [], "trufflehog": [] },
+    "github-token": {
+      "gitleaks": ["github-pat", "github-fine-grained-pat", "github-oauth", "github-app-token", "github-refresh-token"],
+      "trufflehog": ["Github"]
+    },
+    "stripe-api-key": { "gitleaks": ["stripe-access-token"], "trufflehog": ["Stripe"] },
+    "jwt-token": { "gitleaks": ["jwt"], "trufflehog": ["JWT"] },
+    "private-key": { "gitleaks": ["private-key"], "trufflehog": ["PrivateKey"] },
+    "google-api-key": { "gitleaks": ["gcp-api-key"], "trufflehog": ["GoogleGeminiAPIKey"] },
+    "slack-token": { "gitleaks": ["slack-bot-token", "slack-user-token", "slack-app-token"], "trufflehog": ["Slack"] },
+    "database-url": { "gitleaks": [], "trufflehog": ["Postgres", "MongoDB", "Redis"] },
+    "basic-auth-url": { "gitleaks": [], "trufflehog": ["URI"] },
+    "huggingface-token": { "gitleaks": ["huggingface-access-token"], "trufflehog": ["HuggingFace"] },
+    "gitlab-token": { "gitleaks": ["gitlab-pat"], "trufflehog": ["Gitlab"] },
+    "discord-token": { "gitleaks": [], "trufflehog": ["DiscordBotToken"] },
+    "npm-token": { "gitleaks": ["npm-access-token"], "trufflehog": ["NpmToken"] },
+    "sendgrid-api-key": { "gitleaks": ["sendgrid-api-token"], "trufflehog": ["SendGrid"] },
+    "twilio-account-sid": { "gitleaks": [], "trufflehog": [] },
+    "supabase-key": { "gitleaks": [], "trufflehog": ["SupabaseToken"] },
+    "telegram-bot-token": { "gitleaks": ["telegram-bot-api-token"], "trufflehog": ["TelegramBotToken"] },
+    "twilio-api-key": { "gitleaks": ["twilio-api-key"], "trufflehog": ["TwilioApiKey"] },
+    "azure-storage-key": { "gitleaks": [], "trufflehog": ["AzureStorage"] },
+    "gcp-oauth-client-secret": { "gitleaks": [], "trufflehog": [] },
+    "digitalocean-token": { "gitleaks": ["digitalocean-pat"], "trufflehog": ["DigitalOceanV2"] },
+    "mailgun-api-key": { "gitleaks": ["mailgun-private-api-token"], "trufflehog": ["Mailgun"] },
+    "openrouter-api-key": { "gitleaks": [], "trufflehog": ["OpenRouter"] },
+    "groq-api-key": { "gitleaks": [], "trufflehog": ["Groq"] },
+    "xai-api-key": { "gitleaks": [], "trufflehog": ["XAI"] },
+    "perplexity-api-key": { "gitleaks": ["perplexity-api-key"], "trufflehog": [] },
+    "replicate-api-token": { "gitleaks": [], "trufflehog": ["Replicate"] },
+    "huggingface-org-token": { "gitleaks": ["huggingface-organization-api-token"], "trufflehog": ["HuggingFace"] },
+    "langsmith-api-key": { "gitleaks": [], "trufflehog": ["LangSmith"] },
+    "npmrc-auth": { "gitleaks": [], "trufflehog": [] },
+    "netrc-password": { "gitleaks": [], "trufflehog": [] },
+    "docker-config-auth": { "gitleaks": [], "trufflehog": ["Docker"] },
+    "dotenv-secret": { "gitleaks": [], "trufflehog": [] },
+    "quoted-secret-assignment": { "gitleaks": [], "trufflehog": [] },
+    "kubernetes-secret": { "gitleaks": ["kubernetes-secret-yaml"], "trufflehog": [] },
+    "email-address": { "gitleaks": [], "trufflehog": [] },
+    "ipv4-address": { "gitleaks": [], "trufflehog": [] },
+    "us-ssn": { "gitleaks": [], "trufflehog": [] },
+    "credit-card": { "gitleaks": [], "trufflehog": [] },
+    "ipv6-address": { "gitleaks": [], "trufflehog": [] },
+    "phone-number": { "gitleaks": [], "trufflehog": [] },
+    "vn-citizen-id": { "gitleaks": [], "trufflehog": [] },
+    "vn-id-number": { "gitleaks": [], "trufflehog": [] },
+    "vn-tax-code": { "gitleaks": [], "trufflehog": [] },
+    "vn-bank-account": { "gitleaks": [], "trufflehog": [] }
+  }
+}

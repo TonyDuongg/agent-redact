@@ -54,6 +54,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Kubernetes JSON output is covered only through quoted assignments.
 - `scripts/verify-provider-keys.mjs` excludes the context patterns, so it still judges each provider pattern on its own.
 
+### 🧰 Quality tooling (repository only, not in the published package)
+- **Coverage report against gitleaks and trufflehog.** `npm run scanner-coverage` (`scripts/coverage-report.mjs`) writes [`benchmarks/coverage.md`](benchmarks/coverage.md).
+  - **Inputs:** gitleaks v8.30.1 `config/gitleaks.toml` and trufflehog v3.99.9 `proto/detector_type.proto`, each pinned by commit and sha256 in `benchmarks/coverage-map.json`. They are downloaded as text and parsed with regular expressions; nothing is executed. A changed file fails the sha256 check.
+  - **Mapping:** maintained by hand in the same JSON. The script fails on an unknown or deprecated rule or detector name, and on any default or preset pattern without an entry.
+  - **Result:** 27/222 gitleaks rules and 31/1,039 trufflehog detector types are covered. 83 providers known to both scanners are listed as the backlog.
+- **Accuracy benchmark on synthetic data.** `npm run bench:accuracy` (`benchmarks/accuracy.mjs`) reports precision and recall per pattern; the table is published in the README.
+  - **Corpus:** 552 labelled secrets generated from a fixed seed in env, JSON, YAML, code and log contexts, plus 251 decoy lines.
+  - **Documented limitations are included on purpose** (lowercase `.env` keys, quoted values with spaces or letters only, Kubernetes JSON).
+  - **Result:** precision 1.000, recall 0.978, 12 secrets left visible, all from those limitations.
+  - `tests/accuracy-bench.test.ts` checks the scorer and fails when the README table no longer matches the code.
+- **Automatic ReDoS fuzzing.** `tests/redos-fuzz.test.ts` covers every default pattern, every preset pattern and the opt-in entropy pattern.
+  - **Inputs:** derived from each regex's own literals and character classes (class members are found by testing a character pool against the class).
+  - **Check:** each input runs at 8k and 32k characters, and the test fails if the time grows by more than 10× (linear ≈ 4×, quadratic ≈ 16×).
+  - **Self-check:** a deliberately quadratic canary pattern must be flagged.
+  - **Result:** all 50 patterns pass.
+
 ### ✨ Edit files that contain secrets without seeing them (MCP)
 - **`read_file_redacted {filePath}`:** returns the content with placeholders unique to that file (`[AWS_ACCESS_KEY_ID_1]` …), plus a `revision` (sha256 of the real content). Each file has its own in-memory vault, so numbering is stable across reads.
 - **`edit_file_redacted {filePath, oldString, newString, replaceAll?, revision}`:** applies the edit to the redacted text, then writes it back with **only that file's** placeholders restored.
