@@ -46,6 +46,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "bench": "npm run build && node benchmarks/run.mjs",
+    "bench:accuracy": "npm run build && node benchmarks/accuracy.mjs",
+    "scanner-coverage": "npm run build && node scripts/coverage-report.mjs --out benchmarks/coverage.md",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },
   "keywords": [
