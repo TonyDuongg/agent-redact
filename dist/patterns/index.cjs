@@ -331,6 +331,266 @@ var CREDENTIAL_PATTERNS = [
   langsmithApiKeyPattern
 ];
 
+// src/patterns/context.ts
+var MIN_SECRET_LENGTH = 8;
+var REFERENCE_HINT = /\$\{|\$\(|^\$[A-Za-z_]|^%[A-Za-z_]\w*%$|\{\{|\{%|<%|`|process\.env|import\.meta\.env|os\.environ|getenv\s*\(|Deno\.env/i;
+var PLACEHOLDER_HINT = /^<.*>$|^\[.*\]$|^your[-_ ]|[-_ ]here$|example|placeholder|change[-_]?me|changeit|dummy|redacted|x{4,}|\*{3,}|•{3,}|\.{3}|…/i;
+var DUMMY_WORD = /^(?:password|passwd|secret|undefined|null|none|nil|true|false)$/i;
+var SINGLE_REPEATED_CHAR = /^(.)\1*$/s;
+function isPlausibleSecretValue(value) {
+  if (value.length < MIN_SECRET_LENGTH) return false;
+  if (SINGLE_REPEATED_CHAR.test(value)) return false;
+  return !REFERENCE_HINT.test(value) && !PLACEHOLDER_HINT.test(value) && !DUMMY_WORD.test(value);
+}
+var CODE_IDENTIFIER = /^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*$/;
+var npmrcAuthPattern = {
+  id: "npmrc-auth",
+  name: "npm Registry Credential (.npmrc)",
+  category: "credential",
+  severity: "critical",
+  // '#' and ';' stay in the value: cutting there could leave the rest of a token visible
+  regex: /^[ \t]*(?:\/\/[^\s=]*:)?(?:_authToken|_auth|_password)[ \t]*=[ \t]*["']?([^\s"']+)/gm,
+  secretGroup: 1,
+  validator: (v) => isPlausibleSecretValue(v) && !/[()]/.test(v) && !CODE_IDENTIFIER.test(v),
+  placeholder: "NPMRC_AUTH",
+  description: ".npmrc _authToken, _auth or _password value"
+};
+var netrcPasswordPattern = {
+  id: "netrc-password",
+  name: "netrc Password",
+  category: "credential",
+  severity: "high",
+  regex: /(?<!\S)(?:machine[ \t]+\S+|default)(?:\s+(?:login|account|port)[ \t]+\S+)*\s+password[ \t]+(\S+)/g,
+  secretGroup: 1,
+  validator: isPlausibleSecretValue,
+  placeholder: "NETRC_PASSWORD",
+  description: "Password of a .netrc machine or default entry"
+};
+function isBase64UserPassword(value) {
+  let decoded;
+  try {
+    decoded = atob(value);
+  } catch {
+    return false;
+  }
+  const colon = decoded.indexOf(":");
+  return /^[\x20-\x7e]+$/.test(decoded) && colon > 0 && colon < decoded.length - 1;
+}
+var dockerConfigAuthPattern = {
+  id: "docker-config-auth",
+  name: "Docker Registry Auth (config.json)",
+  category: "credential",
+  severity: "high",
+  regex: /"auth"[ \t]*:[ \t]*"([A-Za-z0-9+/]{8,}={0,2})"/g,
+  secretGroup: 1,
+  validator: isBase64UserPassword,
+  placeholder: "DOCKER_AUTH",
+  description: 'Base64 user:password in a Docker config.json "auth" field'
+};
+var dotenvSecretPattern = {
+  id: "dotenv-secret",
+  name: "Secret in .env Assignment",
+  category: "credential",
+  severity: "high",
+  regex: /(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|SECRET_(?:ACCESS_)?KEY(?:_BASE)?)(?:_?[0-9]{1,3})?(?=[ \t]*=)(?<=^[ \t]*(?:-[ \t]+)?(?:(?:export|ENV|ARG|set|SET)[ \t]+)?[A-Z][A-Z0-9_]*)[ \t]*=[ \t]*["']?((?<=")(?:[^"\\\r\n]|\\.)+(?=")|(?<=')[^'\r\n]+(?=')|(?<==)\S+(?:[ \t]+(?!#)\S+)*)/gm,
+  secretGroup: 1,
+  validator: isPlausibleSecretValue,
+  placeholder: "ENV_SECRET",
+  description: "Value of an UPPERCASE PASSWORD / SECRET / TOKEN / API_KEY variable"
+};
+function isNameLike(value) {
+  return new RegExp("^\\??\\p{L}+(?:[-_.]\\p{L}+)*$", "u").test(value);
+}
+var quotedSecretAssignmentPattern = {
+  id: "quoted-secret-assignment",
+  name: "Quoted Secret Assignment",
+  category: "credential",
+  severity: "high",
+  // Starts at the keyword (cheap to scan for); (?![\w.-]) makes it the end of the key name
+  regex: /(?:password|passwd|passphrase|[_.-]pass|secret|secret[_.-]?key|api[_.-]?key|token)(?![\w.-])(?<!(?:page|next|prev|sync|continuation|cancellation|csrf|xsrf|cursor|resume|bos|eos|pad|unk|sep|cls|mask|stop)[_.-]?token)\\?["']?[ \t]*(?:=>|:=|[:=])[ \t]*\\?["']((?<=\\")[^"\\\r\n]+(?=\\")|(?<=")(?:[^"\\\r\n]|\\.)+(?=")|(?<=')(?:[^'\\\r\n]|\\.|'')+(?='))/gi,
+  secretGroup: 1,
+  // No whitespace (UI labels and messages) and no letters-only names (see isNameLike)
+  validator: (v) => isPlausibleSecretValue(v) && !/\s/.test(v) && !isNameLike(v),
+  placeholder: "QUOTED_SECRET",
+  description: "Quoted value assigned to a password, secret, token or API key"
+};
+var KIND_SECRET_LINE = /^kind[ \t]*:[ \t]*(["']?)Secret\1[ \t]*(?:#.*)?$/;
+var DATA_KEY_LINE = /^(?:data|stringData)[ \t]*:(?=[ \t]|$)/;
+function buildLineTable(text) {
+  const t = { start: [], end: [], indent: [], col: [], blank: [], boundary: [], nextFilled: [] };
+  let pos = 0;
+  for (; ; ) {
+    let nl = text.indexOf("\n", pos);
+    if (nl === -1) nl = text.length;
+    let end = nl;
+    if (end > pos && text.charCodeAt(end - 1) === 13) end--;
+    let i = pos;
+    while (i < end && text.charCodeAt(i) === 32) i++;
+    const indent = i - pos;
+    const blank = i >= end || text.charCodeAt(i) === 35;
+    const boundary = indent === 0 && (text.startsWith("---", pos) && (end - pos === 3 || /\s/.test(text[pos + 3] ?? "")) || end - pos === 3 && text.startsWith("...", pos));
+    while (i < end && text.charCodeAt(i) === 45 && (i + 1 === end || text.charCodeAt(i + 1) === 32 || text.charCodeAt(i + 1) === 9)) {
+      i++;
+      while (i < end && (text.charCodeAt(i) === 32 || text.charCodeAt(i) === 9)) i++;
+    }
+    t.start.push(pos);
+    t.end.push(end);
+    t.indent.push(indent);
+    t.col.push(i - pos);
+    t.blank.push(blank);
+    t.boundary.push(boundary);
+    if (nl === text.length) break;
+    pos = nl + 1;
+  }
+  const n = t.start.length;
+  t.nextFilled = new Array(n + 1);
+  t.nextFilled[n] = n;
+  for (let k = n - 1; k >= 0; k--) t.nextFilled[k] = t.blank[k] ? t.nextFilled[k + 1] : k;
+  return t;
+}
+function closingQuote(text, open, end) {
+  const q = text.charCodeAt(open);
+  for (let i = open + 1; i < end; i++) {
+    const c = text.charCodeAt(i);
+    if (q === 34 && c === 92) {
+      i++;
+    } else if (c === q) {
+      if (q === 39 && text.charCodeAt(i + 1) === 39) {
+        i++;
+        continue;
+      }
+      return i;
+    }
+  }
+  return -1;
+}
+function afterKey(text, p, end) {
+  let i = p;
+  const c = text.charCodeAt(p);
+  if (c === 34 || c === 39) {
+    const close = closingQuote(text, p, end);
+    if (close === -1) return -1;
+    i = close + 1;
+    while (i < end && (text.charCodeAt(i) === 32 || text.charCodeAt(i) === 9)) i++;
+    return i < end && text.charCodeAt(i) === 58 ? i + 1 : -1;
+  }
+  for (; ; ) {
+    const colon = text.indexOf(":", i);
+    if (colon === -1 || colon >= end) return -1;
+    const next = text.charCodeAt(colon + 1);
+    if (colon + 1 === end || next === 32 || next === 9) return colon + 1;
+    i = colon + 1;
+  }
+}
+function detectKubernetesSecretValues(text) {
+  const t = buildLineTable(text);
+  const n = t.start.length;
+  const spans = [];
+  const doneUntil = /* @__PURE__ */ new Map();
+  const contentStart = (k) => t.start[k] + t.col[k];
+  const lastDeeper = (from, indent) => {
+    let last = from;
+    for (let j = t.nextFilled[from + 1]; j < n; j = t.nextFilled[j + 1]) {
+      if (t.boundary[j] || t.indent[j] <= indent) break;
+      last = j;
+    }
+    return last;
+  };
+  for (let k = t.nextFilled[0]; k < n; k = t.nextFilled[k + 1]) {
+    const c = t.col[k];
+    const s = contentStart(k);
+    if (!text.startsWith("kind", s) || !KIND_SECRET_LINE.test(text.slice(s, t.end[k]))) continue;
+    if ((doneUntil.get(c) ?? -1) >= k) continue;
+    let a = k;
+    if (t.indent[k] === c) {
+      for (let j = k - 1; j >= 0; j--) {
+        if (t.boundary[j]) break;
+        if (t.blank[j]) continue;
+        if (t.indent[j] >= c) {
+          a = j;
+          continue;
+        }
+        if (t.col[j] === c) a = j;
+        break;
+      }
+    }
+    let b = k;
+    for (let j = t.nextFilled[k + 1]; j < n; j = t.nextFilled[j + 1]) {
+      if (t.boundary[j] || t.indent[j] < c) break;
+      b = j;
+    }
+    doneUntil.set(c, b);
+    for (let d = a; d <= b; d = t.nextFilled[d + 1]) {
+      if (t.col[d] !== c || t.indent[d] !== c && d !== a) continue;
+      const ds = contentStart(d);
+      const key = DATA_KEY_LINE.exec(text.slice(ds, t.end[d]));
+      if (!key) continue;
+      const blockEnd = lastDeeper(d, c);
+      let v = ds + key[0].length;
+      while (v < t.end[d] && (text.charCodeAt(v) === 32 || text.charCodeAt(v) === 9)) v++;
+      if (v < t.end[d] && text.charCodeAt(v) !== 35) {
+        spans.push([v, t.end[blockEnd]]);
+        continue;
+      }
+      for (let j = t.nextFilled[d + 1]; j <= blockEnd && j < n; j = t.nextFilled[j + 1]) {
+        const entryIndent = t.indent[j];
+        const last = lastDeeper(j, entryIndent);
+        const p = t.start[j] + t.col[j];
+        const lineEnd = t.end[j];
+        const colonEnd = t.col[j] === entryIndent ? afterKey(text, p, lineEnd) : -1;
+        if (colonEnd === -1) {
+          spans.push([p, t.end[last]]);
+          j = last;
+          continue;
+        }
+        let vs = colonEnd;
+        while (vs < lineEnd && (text.charCodeAt(vs) === 32 || text.charCodeAt(vs) === 9)) vs++;
+        const ch = text.charCodeAt(vs);
+        if (vs >= lineEnd || ch === 35 || ch === 124 || ch === 62) {
+          if (last > j) {
+            const first = t.nextFilled[j + 1];
+            spans.push([t.start[first] + t.indent[first], t.end[last]]);
+          }
+        } else if (ch === 34 || ch === 39) {
+          const close = closingQuote(text, vs, lineEnd);
+          spans.push([vs + 1, close === -1 ? t.end[last] : close]);
+        } else if (last > j) {
+          spans.push([vs, t.end[last]]);
+        } else {
+          let e = lineEnd;
+          const comment = text.slice(vs, lineEnd).search(/[ \t]#/);
+          if (comment !== -1) e = vs + comment;
+          while (e > vs && (text.charCodeAt(e - 1) === 32 || text.charCodeAt(e - 1) === 9)) e--;
+          spans.push([vs, e]);
+        }
+        j = last;
+      }
+    }
+  }
+  return spans;
+}
+var kubernetesSecretPattern = {
+  id: "kubernetes-secret",
+  name: "Kubernetes Secret Value",
+  category: "credential",
+  severity: "high",
+  // Gate only: the values are found by `detect`
+  regex: /^[ \t]*(?:-[ \t]+)*kind[ \t]*:[ \t]*["']?Secret["']?[ \t]*(?:#.*)?\r?$/m,
+  detect: detectKubernetesSecretValues,
+  // Skip templates and our own placeholders, so redacted output is never redacted again
+  validator: (v) => v.trim().length > 0 && !/\{\{|\$\{|\{%/.test(v) && !/^\[[A-Z][A-Z0-9_]*\]$/.test(v.trim()),
+  placeholder: "K8S_SECRET_VALUE",
+  description: "Value under data/stringData of a Kubernetes Secret manifest"
+};
+var CONTEXT_PATTERNS = [
+  npmrcAuthPattern,
+  netrcPasswordPattern,
+  dockerConfigAuthPattern,
+  dotenvSecretPattern,
+  quotedSecretAssignmentPattern,
+  kubernetesSecretPattern
+];
+
 // src/patterns/pii.ts
 var emailPattern = {
   id: "email-address",
@@ -498,6 +758,7 @@ function resolvePresets(names) {
 // src/patterns/index.ts
 var DEFAULT_PATTERNS = [
   ...CREDENTIAL_PATTERNS,
+  ...CONTEXT_PATTERNS,
   ...PII_PATTERNS
 ];
 var PATTERN_MAP = new Map([
@@ -506,6 +767,7 @@ var PATTERN_MAP = new Map([
   // Alias for backwards compatibility
 ]);
 
+exports.CONTEXT_PATTERNS = CONTEXT_PATTERNS;
 exports.CREDENTIAL_PATTERNS = CREDENTIAL_PATTERNS;
 exports.DEFAULT_PATTERNS = DEFAULT_PATTERNS;
 exports.PATTERN_MAP = PATTERN_MAP;
@@ -522,6 +784,8 @@ exports.databaseUriPattern = databaseUriPattern;
 exports.databaseUrlPattern = databaseUrlPattern;
 exports.digitalOceanTokenPattern = digitalOceanTokenPattern;
 exports.discordTokenPattern = discordTokenPattern;
+exports.dockerConfigAuthPattern = dockerConfigAuthPattern;
+exports.dotenvSecretPattern = dotenvSecretPattern;
 exports.emailPattern = emailPattern;
 exports.gcpOauthSecretPattern = gcpOauthSecretPattern;
 exports.githubTokenPattern = githubTokenPattern;
@@ -532,15 +796,20 @@ exports.huggingFaceOrgTokenPattern = huggingFaceOrgTokenPattern;
 exports.huggingFaceTokenPattern = huggingFaceTokenPattern;
 exports.ipv4Pattern = ipv4Pattern;
 exports.ipv6Pattern = ipv6Pattern;
+exports.isPlausibleSecretValue = isPlausibleSecretValue;
 exports.jwtTokenPattern = jwtTokenPattern;
+exports.kubernetesSecretPattern = kubernetesSecretPattern;
 exports.langsmithApiKeyPattern = langsmithApiKeyPattern;
 exports.mailgunApiKeyPattern = mailgunApiKeyPattern;
+exports.netrcPasswordPattern = netrcPasswordPattern;
 exports.npmTokenPattern = npmTokenPattern;
+exports.npmrcAuthPattern = npmrcAuthPattern;
 exports.openaiApiKeyPattern = openaiApiKeyPattern;
 exports.openrouterApiKeyPattern = openrouterApiKeyPattern;
 exports.perplexityApiKeyPattern = perplexityApiKeyPattern;
 exports.phonePattern = phonePattern;
 exports.privateKeyPattern = privateKeyPattern;
+exports.quotedSecretAssignmentPattern = quotedSecretAssignmentPattern;
 exports.replicateApiTokenPattern = replicateApiTokenPattern;
 exports.resolvePresets = resolvePresets;
 exports.sendgridApiKeyPattern = sendgridApiKeyPattern;

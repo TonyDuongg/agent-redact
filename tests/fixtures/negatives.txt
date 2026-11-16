@@ -48,3 +48,70 @@ base64 of "hello world": aGVsbG8gd29ybGQ=
 jwt-like but not a JWT: header.payload.signature
 placeholder values: YOUR_API_KEY_HERE, <token>, ${OPENAI_API_KEY}, process.env.STRIPE_SECRET
 redacted examples: [REDACTED_AWS_ACCESS_KEY_ID] [AWS_ACCESS_KEY_ID_1] sk-ant-... ghp_xxx
+
+## code that reads secrets from the environment or a secret store (no literal values)
+password = os.environ["DB_PASSWORD"]
+db_password = os.getenv("DB_PASSWORD", "")
+const apiKey = process.env.OPENAI_API_KEY;
+const token = await getToken({ scope: 'repo' });
+const secret = await client.getSecret("db-password");
+password: process.env.DB_PASSWORD,
+SECRET_KEY = env("DJANGO_SECRET_KEY")
+API_TOKEN = settings.API_TOKEN
+_auth = build_auth(registry)
+if (password === confirmPassword) return true;
+if user.password == hashed_password:
+<input type="password" name="password" autocomplete="current-password">
+"password_hint": "Your first pet's name",
+"forgot_password": "Forgot your password?",
+"password": "Mật khẩu",
+"password": "Passwort",
+"next_page_token": "CAESBgoEOgIIAQ",
+"eos_token": "<|endoftext|>", "pad_token": "[PAD]",
+"auth": "required", "credsStore": "desktop"
+
+## names, labels and lexer states assigned to token/secret/password-named variables
+## (found by scanning node_modules: json-schema-typed, vite, rollup, zod)
+IETFToken = "ietf-token",
+lastSignificantToken = "?InterpolationInTemplate";
+nextLastSignificantToken = "?NonExpressionParenKeyword";
+confirmPassword: "different",
+const REFRESH_TOKEN = "refresh_token";
+export const ACCESS_TOKEN_COOKIE = "accessToken", CSRF_HEADER_SECRET = "X-Secret-Header";
+
+## templates and documentation placeholders
+DB_PASSWORD=${DB_PASSWORD}
+DB_PASSWORD=<your-database-password>
+API_KEY=your_api_key_here
+JWT_SECRET=changeme
+SESSION_SECRET=********
+GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+REDIS_PASSWORD=
+TOKEN_URL=https://oauth2.example.com/token
+PASSWORD_MIN_LENGTH=12
+MAX_TOKENS=4096
+export DB_PASSWORD="$(vault kv get -field=password secret/db)"
+password: "{{ vault_db_password }}"
+password: "${POSTGRES_PASSWORD}"
+"client_secret": "<CLIENT_SECRET>",
+"api_key": "sk-...",
+token: 'xxxxxxxxxxxxxxxx'
+//registry.npmjs.org/:_authToken=${NPM_TOKEN}
+machine api.example.com login user password ${NETRC_PASSWORD}
+The machine name, login and password are stored in ~/.netrc for each host.
+Set the password with `export DB_PASSWORD=...` before running the tests.
+
+## Kubernetes: non-Secret kinds and templated Secrets (keep this section last: a Secret
+## document runs to the end of the file)
+kind: ConfigMap
+data:
+  log_level: debug-verbose
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-db
+data:
+  password: {{ .Values.db.password | b64enc | quote }}
+stringData:
+  token: "{{ required "token is required" .Values.token }}"

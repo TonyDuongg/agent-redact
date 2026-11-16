@@ -11,6 +11,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⚠️ Upgrade notes (behavior changes)
 - **MCP `unmask_text` is disabled by default.** It can write any secret of the session into any file inside the sandbox, so a prompt-injected model could copy secrets into files that get committed or published. It now returns an error that explains how to enable it: `agent-redact mcp --allow-unmask-text`, `AGENT_REDACT_ALLOW_UNMASK_TEXT=1`, or `createMcpServer({ allowUnmaskText: true })`. Use `read_file_redacted` / `edit_file_redacted` to change files that contain secrets.
+- **Six context-aware secret patterns are on by default** (see below), so scans, baselines, the GitHub Action, the Claude Code hook and redaction can report or mask more than before:
+  - `.env` values of UPPERCASE `*PASSWORD` / `*SECRET` / `*TOKEN` / `*API_KEY` keys;
+  - quoted password/secret/token/API-key literals in code and config;
+  - `.npmrc`, `.netrc` and Docker `config.json` credentials;
+  - Kubernetes Secret values.
+
+  Existing baselines stay valid but do not contain the new findings: review them, then run `--write-baseline` again if they are accepted. The hook now blocks reads of files such as a `.env` with `DB_PASSWORD=...`; use `read_file_redacted` instead. To keep the 0.4 behavior, exclude the ids: `npmrc-auth`, `netrc-password`, `docker-config-auth`, `dotenv-secret`, `quoted-secret-assignment`, `kubernetes-secret`.
+- `password = "..."` style literals are now redacted without `detectHighEntropy`, with the `[QUOTED_SECRET]` label (or `[ENV_SECRET]` for UPPERCASE keys) instead of `[GENERIC_SECRET]`.
+
+### 🔎 Context-aware secrets (on by default)
+- **New patterns.** Each has its own id and placeholder and redacts only the value, never the key. Where a vendor pattern matches the same value, the vendor label wins.
+
+  | id | Detects | Placeholder |
+  | :--- | :--- | :--- |
+  | `npmrc-auth` | `.npmrc` `_authToken`, `_auth`, `_password`, registry-scoped or global | `NPMRC_AUTH` |
+  | `netrc-password` | `.netrc` `machine … login … password …`, on one line or several, and `default` entries | `NETRC_PASSWORD` |
+  | `docker-config-auth` | Docker `config.json` `"auth"` values that decode to `user:password` | `DOCKER_AUTH` |
+  | `dotenv-secret` | `.env` lines whose UPPERCASE key ends in `PASSWORD`, `PASSWD`, `SECRET`, `TOKEN`, `API_KEY` or `SECRET_KEY`, including `export`, docker-compose `- KEY=…` and Dockerfile `ENV`/`ARG` | `ENV_SECRET` |
+  | `quoted-secret-assignment` | quoted literals assigned to password/secret/token/API-key keys in JSON, YAML, TOML, XML attributes, Python, JS, PHP and Go, including JSON embedded in a JSON string | `QUOTED_SECRET` |
+  | `kubernetes-secret` | values under `data:`/`stringData:` of YAML `kind: Secret` documents, whether `kind` comes before or after `data`, and inside `kind: List` | `K8S_SECRET_VALUE` |
+- **No false positives on placeholders.** A shared validator (`isPlausibleSecretValue`, exported) rejects:
+  - environment references: `${VAR}`, `$VAR`, `%VAR%`, `$(…)`, `process.env.X`, `os.environ[…]`, `getenv(…)`;
+  - templates: `{{ … }}`, `{% … %}`;
+  - documentation placeholders: `<your-key>`, `your_…_here`, `changeme`, `example`, `xxxx`, `****`, `...`;
+  - literals such as `null`, `none`, `true`, `false` or `password`;
+  - single repeated characters, values shorter than 8 characters, and agent-redact placeholders.
+
+  Quoted assignments also skip values with spaces and letters-only values: names, labels and lexer states such as `"refresh_token"` or `"?InterpolationInJSX"` (found by scanning 37 MB of `node_modules`).
+- **Unquoted code assignments are not matched:** `password = get_pw()` and `API_TOKEN = settings.TOKEN` are not findings.
+- **Fail closed on spans.** An unquoted `.env` value runs to the end of the line or a ` #` comment, spaces included. Backslash escapes, YAML `''` escapes, and `#`/`;` inside `.npmrc` values stay in the span, so no part of a secret is left visible. These cases were found during review and each has a regression test.
+- **`RedactPattern.detect`** (new, optional) is a structural detector for secrets one regex cannot express. When it is set, `regex` only gates the detector, and `validator` and the allowlist still apply to each span. The Kubernetes detector uses it: it runs in linear time over a line table.
+- **Performance:**
+  - `tests/perf.test.ts` adds 19 adversarial inputs (key runs, unclosed quotes, backslash runs, nested and duplicated YAML mappings). All of them scale linearly (4× input ≈ 4× time).
+  - Key patterns start at the keyword, so the overhead on the benchmark payload is about 5–20%.
+- **Tests:**
+  - `tests/context-secrets.test.ts` (28) covers the new patterns;
+  - every new pattern has positives with exact spans in `tests/detection.test.ts`;
+  - `tests/fixtures/negatives.txt` adds code that reads the environment, documentation placeholders, templates and non-Secret manifests, and still has 0 findings.
+- **Limitations (documented in the README):**
+  - `createRedactStream` is line-based, so multi-line `.netrc` entries and Kubernetes manifests are not detected in streams;
+  - Kubernetes JSON output is covered only through quoted assignments.
+- `scripts/verify-provider-keys.mjs` excludes the context patterns, so it still judges each provider pattern on its own.
 
 ### ✨ Edit files that contain secrets without seeing them (MCP)
 - **`read_file_redacted {filePath}`:** returns the content with placeholders unique to that file (`[AWS_ACCESS_KEY_ID_1]` …), plus a `revision` (sha256 of the real content). Each file has its own in-memory vault, so numbering is stable across reads.

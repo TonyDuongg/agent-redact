@@ -298,17 +298,19 @@ Fixed regex patterns can't predict private, custom, or proprietary token prefixe
 
 * **Entropy $\ge 4.3$**: Flags and masks unstructured cryptographic Base64 strings.
 * **Entropy $\ge 3.2$**: Flags and masks random Hex keys.
-* **Predictable text** (`password = "admin123admin123"`): Safely ignored to prevent false positives.
+* **Predictable text** (`password: admin123admin123`): Ignored to prevent false positives.
 
 ```typescript
 import { redact, calculateShannonEntropy } from 'agent-redact';
 
-// Detect unknown random secrets:
-const result = redact('custom_token = "d9F8qZ1_pLm4wK7aQx0vN2yB8rC3eH6j"', {
+// Detect unknown random secrets in unquoted assignments:
+const result = redact('custom_token: d9F8qZ1_pLm4wK7aQx0vN2yB8rC3eH6j', {
   detectHighEntropy: true
 });
-// => custom_token = "[REDACTED_GENERIC_SECRET]"
+// => custom_token: [REDACTED_GENERIC_SECRET]
 ```
+
+Quoted literals assigned to password-like keys (`password = "..."`) and UPPERCASE `.env` keys are redacted **by default**, whatever their entropy (see [Context-aware secrets](#context-aware-secrets)). The entropy heuristic adds unquoted values and other key names.
 
 ---
 
@@ -673,9 +675,32 @@ Any process running as your user can send requests through the proxy, and the va
 | **Replicate API Token** | `r8_...` | `CRITICAL` | `[REPLICATE_API_TOKEN]` |
 | **Hugging Face Org Token** | `api_org_...` | `HIGH` | `[HUGGINGFACE_ORG_TOKEN]` |
 | **LangSmith API Key** | `lsv2_pt_...` / `lsv2_sk_...` | `HIGH` | `[LANGSMITH_API_KEY]` |
+| **npm registry credential** (`.npmrc`) | `//registry/:_authToken=...`, `_auth=...`, `_password=...` | `CRITICAL` | `[NPMRC_AUTH]` |
+| **netrc password** (`.netrc`) | `machine <host> login <user> password <value>` (one or several lines) | `HIGH` | `[NETRC_PASSWORD]` |
+| **Docker registry auth** (`config.json`) | `"auth": "<base64 user:password>"` | `HIGH` | `[DOCKER_AUTH]` |
+| **`.env` secret** | UPPERCASE key ending in `PASSWORD`, `PASSWD`, `SECRET`, `TOKEN`, `API_KEY`, `SECRET_KEY`: `DB_PASSWORD=...` | `HIGH` | `[ENV_SECRET]` |
+| **Quoted secret assignment** | `password: "..."`, `"client_secret": "..."`, `db_pass = '...'`, `apiKey: '...'` | `HIGH` | `[QUOTED_SECRET]` |
+| **Kubernetes Secret value** | values under `data:` / `stringData:` of a YAML `kind: Secret` | `HIGH` | `[K8S_SECRET_VALUE]` |
 | **PII: Emails & IPv4/IPv6** | RFC 5321 emails, IPv4 & IPv6 network addrs | `MEDIUM` / `LOW` | `[EMAIL_ADDRESS]`, `[IPV4_ADDRESS]`, `[IPV6_ADDRESS]` |
 | **PII: Phone Numbers** | US, international E.164, Vietnamese mobile & landline | `MEDIUM` | `[PHONE_NUMBER]` |
 | **PII: SSN & Cards** | US SSN, Major Credit Cards | `CRITICAL` | `[US_SSN]`, `[CREDIT_CARD]` |
+
+#### Context-aware secrets
+
+The last six credential rows have no vendor prefix; the surrounding context makes the value secret. They are on by default:
+- **Only the value is redacted**, never the key: `DB_PASSWORD=[REDACTED_ENV_SECRET]`.
+- **Placeholders and references are skipped:**
+  - environment references: `${VAR}`, `$VAR`, `%VAR%`, `$(...)`, `process.env.X`, `os.environ[...]`, `getenv(...)`;
+  - templates: `{{ ... }}`, `{% ... %}`;
+  - documentation placeholders: `<your-key>`, `your_..._here`, `changeme`, `example`, `xxxx`, `****`, `...`;
+  - literals such as `null`, `true` or `password`;
+  - values shorter than 8 characters;
+  - agent-redact's own placeholders, so redacted output is never redacted twice.
+- **Unquoted code assignments are not matched.** `password = get_pw()` or `API_TOKEN = settings.TOKEN` are not findings: an unquoted `.env` value must follow `=` directly, and other assignments need a quoted literal.
+- **Quoted assignments skip values that are letters only** (`"refresh_token"`, `"X-Secret-Header"`) and values containing spaces (UI labels and messages). A random token made only of letters is therefore missed in that context; it is still caught as a `.env` value.
+- **Where a vendor pattern matches the same value, its label wins**, for example `GITHUB_TOKEN=ghp_...` gives `[GITHUB_TOKEN]`.
+- **Kubernetes:** Secrets are found whether `kind` comes before or after `data` (`kubectl get -o yaml` sorts keys), in multi-document files and inside `kind: List`. Block scalars (`|`) become one placeholder. JSON output (`-o json`) is covered only through the quoted-assignment pattern.
+- **Streams:** `createRedactStream` works line by line, so multi-line `.netrc` entries and Kubernetes manifests are detected by `redact()`, scanning, the hook, MCP and the proxy, but not by the stream transform.
 
 #### Opt-in presets
 
@@ -689,7 +714,8 @@ Presets are off by default because bare numbers are ambiguous (order or invoice 
 
 `tests/detection.test.ts` holds a labelled corpus:
 - **Positive samples for every built-in pattern.** The test fails if a new pattern is added without one. Samples are assembled at runtime, so no real-looking token is committed.
-- **A negative corpus** (`tests/fixtures/negatives.txt`) of realistic non-secret text: lockfile integrity hashes, git/docker digests, UUIDs, logs, versions, CSS, code, URLs, Ethereum addresses.
+- **A negative corpus** (`tests/fixtures/negatives.txt`) of realistic non-secret text: lockfile integrity hashes, git/docker digests, UUIDs, logs, versions, CSS, code, URLs, Ethereum addresses, code that reads secrets from the environment, documentation placeholders, templates, and non-Secret Kubernetes manifests.
+- **Adversarial inputs** for every context-aware pattern in `tests/perf.test.ts` (long key runs, unclosed quotes, backslash runs, deeply nested YAML), which must stay linear.
 
 Current result: every positive is detected with its exact span, and there are **0 false positives** on the negative corpus. When you fix a false positive, add the snippet there.
 

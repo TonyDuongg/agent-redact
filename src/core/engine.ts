@@ -106,8 +106,48 @@ export class RedactEngine {
     const allowlist = options?.allowlist ?? [];
     const rawMatches: RawMatch[] = [];
 
+    const consider = (pattern: RedactPattern, secret: string, startIndex: number, endIndex: number): void => {
+      // Check if token matches allowlist (exact match only, ignore empty strings)
+      if (
+        allowlist.length > 0 &&
+        allowlist.some((al) => typeof al === 'string' && al.length > 0 && secret === al)
+      ) {
+        return;
+      }
+
+      // Run secondary pattern validator if defined (e.g. Luhn algorithm for credit cards)
+      if (pattern.validator && !pattern.validator(secret)) {
+        return;
+      }
+
+      // If generic high entropy pattern, verify that the token actually exhibits high randomness.
+      // Tokens longer than maxLength are judged on their prefix and then redacted in full,
+      // so a long secret is never left half-visible.
+      if (pattern.id === 'generic-high-entropy-secret') {
+        const entropyConfig = options?.entropy as EntropyConfig | undefined;
+        const maxLength = entropyConfig?.maxLength ?? DEFAULT_ENTROPY_MAX_LENGTH;
+        const sample = secret.length > maxLength ? secret.slice(0, maxLength) : secret;
+        if (!isHighEntropyToken(sample, entropyConfig)) {
+          return;
+        }
+      }
+
+      rawMatches.push({ pattern, secret, startIndex, endIndex });
+    };
+
     // Scan each pattern
     for (const pattern of activePatterns) {
+      if (pattern.detect) {
+        // Structural detector: the regex is only a gate (e.g. "kind: Secret" somewhere)
+        const gate = new RegExp(pattern.regex.source, pattern.regex.flags.replace(/[gy]/g, ''));
+        if (!gate.test(text)) continue;
+        for (const [startIndex, endIndex] of pattern.detect(text)) {
+          if (!(startIndex >= 0 && endIndex > startIndex && endIndex <= text.length)) continue;
+          consider(pattern, text.slice(startIndex, endIndex), startIndex, endIndex);
+        }
+        continue;
+      }
+
       // Create a fresh regex instance with global and indices flags to avoid race conditions and guarantee byte-exact offsets
       let flags = pattern.regex.flags;
       if (!flags.includes('g')) flags += 'g';
@@ -123,38 +163,7 @@ export class RedactEngine {
         }
 
         const { secret, startIndex, endIndex } = selectSecretSpan(match, pattern);
-
-        // Check if token matches allowlist (exact match only, ignore empty strings)
-        if (
-          allowlist.length > 0 &&
-          allowlist.some((al) => typeof al === 'string' && al.length > 0 && secret === al)
-        ) {
-          continue;
-        }
-
-        // Run secondary pattern validator if defined (e.g. Luhn algorithm for credit cards)
-        if (pattern.validator && !pattern.validator(secret)) {
-          continue;
-        }
-
-        // If generic high entropy pattern, verify that the token actually exhibits high randomness.
-        // Tokens longer than maxLength are judged on their prefix and then redacted in full,
-        // so a long secret is never left half-visible.
-        if (pattern.id === 'generic-high-entropy-secret') {
-          const entropyConfig = options?.entropy as EntropyConfig | undefined;
-          const maxLength = entropyConfig?.maxLength ?? DEFAULT_ENTROPY_MAX_LENGTH;
-          const sample = secret.length > maxLength ? secret.slice(0, maxLength) : secret;
-          if (!isHighEntropyToken(sample, entropyConfig)) {
-            continue;
-          }
-        }
-
-        rawMatches.push({
-          pattern,
-          secret,
-          startIndex,
-          endIndex
-        });
+        consider(pattern, secret, startIndex, endIndex);
       }
     }
 
